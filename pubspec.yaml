@@ -46,6 +46,11 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
+  # FlutterFire pluginovi nisu svi iz istog izdanja, pa ih Swift Package
+  # Manager ne može razriješiti. iOS ostaje na CocoaPods-u.
+  config:
+    enable-swift-package-manager: false
+
   assets:
     - assets/
     - shorebird.yaml
