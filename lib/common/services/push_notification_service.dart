@@ -11,6 +11,7 @@ import '../../features/calendar/data/repositories/calendar_repository.dart';
 import '../../features/calendar/ui/screens/book_appointment_screen.dart';
 import '../constants/routes.dart';
 import '../di/di_container.dart';
+import '../shared_prefs/shared_prefs_service.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -32,6 +33,9 @@ class PushNotificationService {
   static const _bannerDuration = Duration(seconds: 8);
 
   bool _isUserSignedIn = false;
+
+  /// Da li prijavljeni korisnik želi notifikacije na ovom uređaju.
+  bool _isEnabled = true;
 
   /// Termin iz notifikacije na koju je korisnik tapnuo prije nego što je
   /// aplikacija bila spremna (npr. aplikacija je bila ugašena).
@@ -62,26 +66,21 @@ class PushNotificationService {
       unawaited(openSlot(pendingSlotId));
     }
 
+    _isEnabled = await isEnabled();
+    if (!_isEnabled) {
+      // Ako odjava tokena ranije nije uspjela (npr. bez interneta), uređaj bi
+      // i dalje dobijao notifikacije.
+      await _unregisterToken();
+      return;
+    }
+
     try {
       final settings = await messaging.requestPermission();
       if (settings.authorizationStatus == AuthorizationStatus.denied) {
         return;
       }
 
-      await _tokenRefreshSubscription?.cancel();
-      _tokenRefreshSubscription = messaging.onTokenRefresh.listen(
-        (token) => unawaited(_registerToken(token)),
-      );
-
-      // Na iOS-u FCM token postoji tek kad stigne APNs token.
-      if (Platform.isIOS && await _waitForApnsToken() == null) {
-        return;
-      }
-
-      final token = await messaging.getToken();
-      if (token != null) {
-        await _registerToken(token);
-      }
+      await _registerCurrentToken();
     } on Exception catch (e, stackTrace) {
       unawaited(FirebaseCrashlytics.instance.recordError(e, stackTrace));
     }
@@ -93,6 +92,80 @@ class PushNotificationService {
     _pendingSlotId = null;
     _hideBanner();
 
+    await _unregisterToken();
+  }
+
+  /// Izbor korisnika iz podešavanja. Podrazumijevano su notifikacije uključene.
+  Future<bool> isEnabled() async {
+    final userId = appState.currentUser?.id;
+    if (userId == null) return true;
+
+    return SharedPrefsService.instance.getPushNotificationsEnabled(userId);
+  }
+
+  /// Da li su notifikacije za aplikaciju isključene u podešavanjima telefona.
+  /// Tada ih aplikacija ne može uključiti sama.
+  Future<bool> isBlockedBySystem() async {
+    final settings = await messaging.getNotificationSettings();
+    return settings.authorizationStatus == AuthorizationStatus.denied;
+  }
+
+  /// Uključuje ili isključuje notifikacije na ovom uređaju. Vraća false ako
+  /// ih nije moguće uključiti jer ih telefon blokira.
+  Future<bool> setEnabled({required bool enabled}) async {
+    final userId = appState.currentUser?.id;
+    if (userId == null) return false;
+
+    if (!enabled) {
+      _isEnabled = false;
+      _hideBanner();
+      await SharedPrefsService.instance.setPushNotificationsEnabled(
+        userId,
+        enabled: false,
+      );
+      await _unregisterToken();
+      return true;
+    }
+
+    final settings = await messaging.requestPermission();
+    if (settings.authorizationStatus == AuthorizationStatus.denied) {
+      return false;
+    }
+
+    _isEnabled = true;
+    await SharedPrefsService.instance.setPushNotificationsEnabled(
+      userId,
+      enabled: true,
+    );
+
+    // Greška pri registraciji (npr. bez interneta) ne znači da telefon
+    // blokira notifikacije; token se ponovo registruje pri sljedećoj prijavi.
+    try {
+      await _registerCurrentToken();
+    } on Exception catch (e, stackTrace) {
+      unawaited(FirebaseCrashlytics.instance.recordError(e, stackTrace));
+    }
+    return true;
+  }
+
+  Future<void> _registerCurrentToken() async {
+    await _tokenRefreshSubscription?.cancel();
+    _tokenRefreshSubscription = messaging.onTokenRefresh.listen(
+      (token) => unawaited(_registerToken(token)),
+    );
+
+    // Na iOS-u FCM token postoji tek kad stigne APNs token.
+    if (Platform.isIOS && await _waitForApnsToken() == null) {
+      return;
+    }
+
+    final token = await messaging.getToken();
+    if (token != null) {
+      await _registerToken(token);
+    }
+  }
+
+  Future<void> _unregisterToken() async {
     await _tokenRefreshSubscription?.cancel();
     _tokenRefreshSubscription = null;
 
@@ -199,7 +272,7 @@ class PushNotificationService {
       'Push (aplikacija otvorena): ${message.notification?.title} '
       '${message.data}, prijavljen: $_isUserSignedIn',
     );
-    if (!_isUserSignedIn) return;
+    if (!_isUserSignedIn || !_isEnabled) return;
 
     final notification = message.notification;
     final messenger = scaffoldMessengerKey.currentState;

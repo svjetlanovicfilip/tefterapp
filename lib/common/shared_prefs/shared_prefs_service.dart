@@ -9,6 +9,7 @@ class SharedPrefsService {
 
   static const String _employeesKey = 'employees_list';
   static const String _clientsFullSyncKey = 'clients_full_sync_at_';
+  static const String _pushNotificationsEnabledKey = 'push_notifications_enabled_';
 
   SharedPreferences? _prefs;
 
@@ -86,6 +87,20 @@ Future<bool> removeUserById(String userId) async {
       '$_clientsFullSyncKey$organizationId',
       time.millisecondsSinceEpoch,
     );
+  }
+
+  /// Da li korisnik želi push notifikacije na ovom uređaju.
+  Future<bool> getPushNotificationsEnabled(String userId) async {
+    final prefs = await _getPrefs();
+    return prefs.getBool('$_pushNotificationsEnabledKey$userId') ?? true;
+  }
+
+  Future<bool> setPushNotificationsEnabled(
+    String userId, {
+    required bool enabled,
+  }) async {
+    final prefs = await _getPrefs();
+    return prefs.setBool('$_pushNotificationsEnabledKey$userId', enabled);
   }
 
   /// Opcionalno: obriši listu
