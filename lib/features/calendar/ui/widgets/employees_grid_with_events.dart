@@ -190,6 +190,8 @@ class EmployeesGridWithEvents extends StatelessWidget {
           );
           if (client != null && client.name.isNotEmpty) {
             title = client.name;
+          } else if ((s.clientName ?? '').isNotEmpty) {
+            title = s.clientName!;
           } else {
             title = s.serviceIds
                 .map((id) => getIt<ServiceBloc>().getServiceById(id)?.title)

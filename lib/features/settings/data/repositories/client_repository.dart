@@ -3,8 +3,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../client.dart';
 
 abstract class ClientRepository {
-  Stream<QuerySnapshot<Map<String, dynamic>>> fetchClients({
+  Future<List<Client>> getCachedClients({required String organizationId});
+  Stream<QuerySnapshot<Map<String, dynamic>>> listenForClientChanges({
     required String organizationId,
+    Timestamp? since,
   });
 
   Future<String> createClient(Client client, String organizationId);

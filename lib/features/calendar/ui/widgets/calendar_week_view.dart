@@ -74,6 +74,7 @@ class CalendarWeekView extends StatelessWidget {
         );
         final title =
             client?.name ??
+            events.first.event?.clientName ??
             events.first.event?.serviceIds
                 .map(
                   (id) =>

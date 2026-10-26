@@ -9,6 +9,7 @@ class Client extends Equatable {
     this.id,
     this.description,
     this.createdAt,
+    this.updatedAt,
   });
 
   factory Client.fromJson(Map<String, dynamic> json, String clientId) {
@@ -18,6 +19,7 @@ class Client extends Equatable {
       id: clientId,
       description: json['description'] as String?,
       createdAt: json['createdAt'] as Timestamp?,
+      updatedAt: json['updatedAt'] as Timestamp?,
       isActive: json['isActive'] as bool,
     );
   }
@@ -30,6 +32,7 @@ class Client extends Equatable {
       'isActive': isActive,
       'createdAt': createdAt,
       // 'id' ne moraš čuvati u dokumentu, id ti je doc.id
+      // 'updatedAt' postavlja datasource preko serverTimestamp-a
     };
   }
 
@@ -38,6 +41,9 @@ class Client extends Equatable {
   final String? id;
   final String? description;
   final Timestamp? createdAt;
+
+  /// Vrijeme posljednje izmjene, koristi se za delta-sync klijenata.
+  final Timestamp? updatedAt;
   final bool isActive;
 
   @override
@@ -47,6 +53,7 @@ class Client extends Equatable {
     id,
     description,
     createdAt,
+    updatedAt,
     isActive,
   ];
 }

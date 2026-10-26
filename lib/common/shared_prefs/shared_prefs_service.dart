@@ -8,6 +8,7 @@ class SharedPrefsService {
   static final SharedPrefsService instance = SharedPrefsService._();
 
   static const String _employeesKey = 'employees_list';
+  static const String _clientsFullSyncKey = 'clients_full_sync_at_';
 
   SharedPreferences? _prefs;
 
@@ -71,6 +72,21 @@ Future<bool> removeUserById(String userId) async {
 
   return prefs.setStringList(_employeesKey, updated);
 }
+
+  /// Kada su klijenti organizacije posljednji put kompletno sinhronizovani.
+  Future<DateTime?> getClientsFullSyncAt(String organizationId) async {
+    final prefs = await _getPrefs();
+    final millis = prefs.getInt('$_clientsFullSyncKey$organizationId');
+    return millis == null ? null : DateTime.fromMillisecondsSinceEpoch(millis);
+  }
+
+  Future<bool> setClientsFullSyncAt(String organizationId, DateTime time) async {
+    final prefs = await _getPrefs();
+    return prefs.setInt(
+      '$_clientsFullSyncKey$organizationId',
+      time.millisecondsSinceEpoch,
+    );
+  }
 
   /// Opcionalno: obriši listu
   Future<bool> clearUsers() async {

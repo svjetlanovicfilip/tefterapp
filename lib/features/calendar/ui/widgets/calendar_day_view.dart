@@ -91,7 +91,8 @@ class CalendarDayView extends StatelessWidget {
             .map((service) => service?.title)
             .join(', ');
 
-        final title = client?.name ?? services ?? '';
+        final title =
+            client?.name ?? events.first.event?.clientName ?? services ?? '';
         final timeRange = formatDateRange(startDuration, endDuration);
         final note = events.first.event?.title;
         final color = events.first.event?.color;

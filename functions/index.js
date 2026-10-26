@@ -462,6 +462,8 @@ function hasRelevantSlotChange(before, after) {
 }
 
 async function describeSlot(orgId, slot) {
+  if (slot.clientName) return slot.clientName;
+
   const orgRef = db.collection("organizations").doc(orgId);
 
   if (slot.clientId) {
@@ -556,3 +558,52 @@ async function sendSlotNotifications({ orgId, slotId, recipients, body }) {
   await Promise.all(invalidTokenRefs.map((ref) => ref.delete()));
 }
 
+
+// ---------------------------------------------------------------------------
+// Klijenti: updatedAt za delta-sync i denormalizovano ime na terminima
+// ---------------------------------------------------------------------------
+
+/**
+ * - Postavlja updatedAt kad ga izmjena nije postavila (starije verzije
+ *   aplikacije), jer aplikacija sinhronizuje samo klijente sa novijim
+ *   updatedAt-om.
+ * - Kad se klijentu promijeni ime, prepisuje clientName na svim njegovim
+ *   terminima. clientName nije u SLOT_NOTIFY_FIELDS, pa to ne šalje
+ *   notifikacije.
+ */
+exports.onClientWritten = onDocumentWritten(
+  "organizations/{orgId}/clients/{clientId}",
+  async (event) => {
+    const { orgId, clientId } = event.params;
+    const before = event.data?.before?.exists ? event.data.before.data() : null;
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+    if (!after) return;
+
+    const updatedAtUnchanged =
+      (before?.updatedAt?.toMillis?.() ?? null) === (after.updatedAt?.toMillis?.() ?? null);
+    // Upis samog updatedAt-a ponovo okida ovu funkciju; tada je updatedAt
+    // promijenjen, pa se ovdje ne upisuje ponovo.
+    if (updatedAtUnchanged) {
+      await event.data.after.ref.update({
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    if (!before || before.name === after.name) return;
+
+    const slotsSnap = await db
+      .collection("organizations")
+      .doc(orgId)
+      .collection("slots")
+      .where("clientId", "==", clientId)
+      .get();
+
+    const writer = db.bulkWriter();
+    slotsSnap.docs.forEach((doc) => {
+      if (doc.data().clientName !== after.name) {
+        writer.update(doc.ref, { clientName: after.name || null });
+      }
+    });
+    await writer.close();
+  }
+);
