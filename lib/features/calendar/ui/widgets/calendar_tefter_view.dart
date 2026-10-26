@@ -4,8 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../common/di/di_container.dart';
 import '../../../../config/style/colors.dart';
 import '../../../login/data/models/user_model.dart';
-import '../../data/models/slot.dart';
-import '../../domain/bloc/employees_calendar_bloc.dart';
+import '../../domain/bloc/slot_bloc.dart';
 import '../../domain/utils/utils.dart';
 import 'employees_grid_with_events.dart';
 
@@ -32,10 +31,7 @@ class CalendarTefterViewState extends State<CalendarTefterView> {
   @override
   void initState() {
     super.initState();
-    // initial 3-day window around today
-    getIt<EmployeesCalendarBloc>().add(
-      EmployeesCalendarDateSet(date: currentDate),
-    );
+    getIt<SlotBloc>().add(DisplayedDateChanged(date: currentDate));
   }
 
   @override
@@ -111,8 +107,8 @@ class CalendarTefterViewState extends State<CalendarTefterView> {
                   setState(() {
                     currentDate = currentDate.subtract(const Duration(days: 1));
                   });
-                  getIt<EmployeesCalendarBloc>().add(
-                    EmployeesCalendarExtendBackward(anchor: currentDate),
+                  getIt<SlotBloc>().add(
+                    DisplayedDateChanged(date: currentDate),
                   );
                 },
               ),
@@ -133,8 +129,8 @@ class CalendarTefterViewState extends State<CalendarTefterView> {
                     );
                     if (picked == null) return;
                     setState(() => currentDate = picked);
-                    getIt<EmployeesCalendarBloc>().add(
-                      EmployeesCalendarDateSet(date: currentDate),
+                    getIt<SlotBloc>().add(
+                      DisplayedDateChanged(date: currentDate),
                     );
                   },
                   child: Center(
@@ -156,8 +152,8 @@ class CalendarTefterViewState extends State<CalendarTefterView> {
                   setState(() {
                     currentDate = currentDate.add(const Duration(days: 1));
                   });
-                  getIt<EmployeesCalendarBloc>().add(
-                    EmployeesCalendarExtendForward(anchor: currentDate),
+                  getIt<SlotBloc>().add(
+                    DisplayedDateChanged(date: currentDate),
                   );
                 },
               ),
@@ -266,16 +262,15 @@ class CalendarTefterViewState extends State<CalendarTefterView> {
                       physics: const ClampingScrollPhysics(),
                       child: SizedBox(
                         width: tableWidth,
-                        child: BlocBuilder<
-                          EmployeesCalendarBloc,
-                          EmployeesCalendarState
-                        >(
-                          bloc: getIt<EmployeesCalendarBloc>(),
-                          builder: (context, empState) {
+                        child: BlocBuilder<SlotBloc, SlotState>(
+                          bloc: getIt<SlotBloc>(),
+                          buildWhen:
+                              (previous, current) => current is SlotsLoaded,
+                          builder: (context, slotState) {
                             final slots =
-                                empState is EmployeesCalendarLoaded
-                                    ? empState.slots
-                                    : const <Slot>[];
+                                slotState is SlotsLoaded
+                                    ? slotState.slots
+                                    : getIt<SlotBloc>().slots;
                             return EmployeesGridWithEvents(
                               employeesCount: employees.length,
                               employees: employees,

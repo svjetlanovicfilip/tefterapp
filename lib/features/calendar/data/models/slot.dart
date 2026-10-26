@@ -17,6 +17,7 @@ class Slot extends Equatable {
     this.serviceIds = const [],
     this.employeeIds = const [],
     this.clientId,
+    this.clientName,
   });
 
   factory Slot.fromJson(Map<String, dynamic> json, String id) {
@@ -37,6 +38,7 @@ class Slot extends Equatable {
               .toList() ??
           [],
       clientId: json['clientId'],
+      clientName: json['clientName'],
     );
   }
 
@@ -49,6 +51,7 @@ class Slot extends Equatable {
       'serviceIds': serviceIds,
       'employeeIds': employeeIds,
       'clientId': clientId,
+      'clientName': clientName,
     };
   }
 
@@ -76,6 +79,7 @@ class Slot extends Equatable {
     String? title,
     List<String>? employeeIds,
     String? clientId,
+    String? clientName,
   }) {
     return Slot(
       id: id ?? this.id,
@@ -86,6 +90,7 @@ class Slot extends Equatable {
       serviceIds: serviceIds ?? this.serviceIds,
       employeeIds: employeeIds ?? this.employeeIds,
       clientId: clientId ?? this.clientId,
+      clientName: clientName ?? this.clientName,
     );
   }
 
@@ -99,6 +104,7 @@ class Slot extends Equatable {
     serviceIds,
     employeeIds,
     clientId,
+    clientName,
   ];
 
   final String? id;
@@ -109,4 +115,8 @@ class Slot extends Equatable {
   final List<String> serviceIds;
   final List<String> employeeIds;
   final String? clientId;
+
+  /// Ime klijenta u trenutku zakazivanja (denormalizovano). Cloud Function
+  /// ga ažurira kad se klijentu promijeni ime.
+  final String? clientName;
 }

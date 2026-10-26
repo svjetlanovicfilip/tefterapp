@@ -10,9 +10,17 @@ class ClientRepositoryImpl implements ClientRepository {
   final ClientRemoteDatasource clientRemoteDatasource;
 
   @override
-  Stream<QuerySnapshot<Map<String, dynamic>>> fetchClients({
+  Future<List<Client>> getCachedClients({required String organizationId}) =>
+      clientRemoteDatasource.getCachedClients(organizationId);
+
+  @override
+  Stream<QuerySnapshot<Map<String, dynamic>>> listenForClientChanges({
     required String organizationId,
-  }) => clientRemoteDatasource.fetchClients(organizationId);
+    Timestamp? since,
+  }) => clientRemoteDatasource.listenForClientChanges(
+    organizationId,
+    since: since,
+  );
 
   @override
   Future<String> createClient(Client client, String organizationId) async {

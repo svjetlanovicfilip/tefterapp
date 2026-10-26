@@ -2,7 +2,7 @@ name: template
 description: "A new Flutter project."
 publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
-version: 1.0.4+2
+version: 1.1.0+3
 
 environment:
   sdk: ^3.7.2
@@ -35,6 +35,8 @@ dependencies:
   store_redirect: ^2.0.1
   firebase_crashlytics: ^5.0.7
   shared_preferences: ^2.2.3
+  firebase_messaging: ^16.1.1
+  app_settings: ^7.0.0
 
 dev_dependencies:
   flutter_test:
@@ -44,6 +46,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # FlutterFire pluginovi nisu svi iz istog izdanja, pa ih Swift Package
+  # Manager ne može razriješiti. iOS ostaje na CocoaPods-u.
+  config:
+    enable-swift-package-manager: false
 
   assets:
     - assets/

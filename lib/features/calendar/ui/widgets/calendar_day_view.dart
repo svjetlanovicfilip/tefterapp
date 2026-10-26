@@ -91,7 +91,8 @@ class CalendarDayView extends StatelessWidget {
             .map((service) => service?.title)
             .join(', ');
 
-        final title = client?.name ?? services ?? '';
+        final title =
+            client?.name ?? events.first.event?.clientName ?? services ?? '';
         final timeRange = formatDateRange(startDuration, endDuration);
         final note = events.first.event?.title;
         final color = events.first.event?.color;
@@ -201,11 +202,7 @@ class CalendarDayView extends StatelessWidget {
       },
 
       onPageChange: (date, page) {
-        if (date.isAfter(DateTime.now())) {
-          _slotBloc.add(LoadMoreForward(currentDisplayedDate: date));
-        } else {
-          _slotBloc.add(LoadMoreBackward(currentDisplayedDate: date));
-        }
+        _slotBloc.add(DisplayedDateChanged(date: date));
       },
       onDateTap: (date) {
         // generateTestData();

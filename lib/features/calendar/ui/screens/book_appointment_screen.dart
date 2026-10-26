@@ -503,6 +503,7 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
     }
 
     final clientId = _clientPickerCubit.state?.id;
+    final clientName = _clientPickerCubit.state?.name;
 
     final newSlot = Slot(
       id: args?.slot?.id,
@@ -513,6 +514,7 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
       serviceIds: serviceIds,
       employeeIds: employeeIds,
       clientId: clientId,
+      clientName: clientName,
     );
 
     if (isEditing) {

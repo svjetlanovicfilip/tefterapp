@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:get_it/get_it.dart';
 
 import '../../blocs/app_init/bloc/app_init_bloc.dart';
@@ -11,7 +12,6 @@ import '../../features/authentication/domain/bloc/authentication_bloc.dart';
 import '../../features/calendar/data/datasources/calendar_remote_datasource.dart';
 import '../../features/calendar/data/repositories/calendar_repository.dart';
 import '../../features/calendar/data/repositories/calendar_repository_impl.dart';
-import '../../features/calendar/domain/bloc/employees_calendar_bloc.dart';
 import '../../features/calendar/domain/bloc/slot_bloc.dart';
 import '../../features/client_history/data/datasources/client_history_remote_datasource.dart';
 import '../../features/client_history/data/repositories/client_history_repository.dart';
@@ -46,6 +46,7 @@ import '../app_state/app_state.dart';
 import '../cubits/calendar_type_view/calendar_type_view_cubit.dart';
 import '../services/firebase_remote_config_service.dart';
 import '../services/force_update_service.dart';
+import '../services/push_notification_service.dart';
 
 final getIt = GetIt.instance;
 
@@ -61,11 +62,6 @@ void setupDependencies() {
     //services
     ..registerSingleton<FirebaseRemoteConfigService>(
       FirebaseRemoteConfigService(),
-    )
-    ..registerLazySingleton<EmployeesCalendarBloc>(
-      () => EmployeesCalendarBloc(
-        calendarRepository: getIt<CalendarRepository>(),
-      ),
     )
     ..registerSingleton<ForceUpdateService>(
       ForceUpdateService(getIt<FirebaseRemoteConfigService>()),
@@ -120,6 +116,13 @@ void setupDependencies() {
         calendarRemoteDatasource: getIt<CalendarRemoteDatasource>(),
       ),
     )
+    ..registerSingleton<PushNotificationService>(
+      PushNotificationService(
+        messaging: FirebaseMessaging.instance,
+        functions: FirebaseFunctions.instanceFor(region: 'europe-west1'),
+        calendarRepository: getIt<CalendarRepository>(),
+      ),
+    )
     ..registerSingleton<UserRepository>(
       UserRepositoryImpl(remote: getIt<UserRemoteDatasource>()),
     )
@@ -164,6 +167,7 @@ void setupDependencies() {
       () => AuthenticationBloc(
         authenticationRepository: getIt<AuthenticationRepository>(),
         organizationRepository: getIt<OrganizationRepository>(),
+        pushNotificationService: getIt<PushNotificationService>(),
       ),
     )
     ..registerLazySingleton<SlotBloc>(

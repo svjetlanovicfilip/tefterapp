@@ -54,6 +54,12 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeScreen> {
     return BlocListener<UsersBloc, UsersState>(
       bloc: usersBloc,
       listener: (context, state) {
+        if (state is UsersAddingFailure) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(state.message)));
+          return;
+        }
         if (state is UsersFetchingSuccess) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(

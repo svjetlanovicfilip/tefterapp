@@ -8,7 +8,6 @@ import '../../../../config/style/colors.dart';
 import '../../../login/data/models/user_model.dart';
 import '../../../service/domain/bloc/service_bloc.dart';
 import '../../../settings/domain/bloc/clients_bloc.dart';
-import '../../../users/domain/bloc/users_bloc.dart';
 import '../../data/models/slot.dart';
 import '../../domain/utils/utils.dart';
 import '../screens/book_appointment_screen.dart';
@@ -93,13 +92,7 @@ class EmployeesGridWithEvents extends StatelessWidget {
                     0,
                     employeesCount - 1,
                   );
-                  final usersState = getIt<UsersBloc>().state;
-                  String? tappedUserId;
-                  if (usersState is UsersFetchingSuccess &&
-                      col >= 0 &&
-                      col < usersState.users.length) {
-                    tappedUserId = usersState.users[col].id;
-                  }
+                  final tappedUserId = employees[col].id;
                   // Prepare args including preselected employee if present
                   final args = BookAppointmentScreenArguments(
                     selectedDate: selectedDateTime,
@@ -197,6 +190,8 @@ class EmployeesGridWithEvents extends StatelessWidget {
           );
           if (client != null && client.name.isNotEmpty) {
             title = client.name;
+          } else if ((s.clientName ?? '').isNotEmpty) {
+            title = s.clientName!;
           } else {
             title = s.serviceIds
                 .map((id) => getIt<ServiceBloc>().getServiceById(id)?.title)

@@ -6,6 +6,7 @@ import 'package:equatable/equatable.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 import '../../../../common/di/di_container.dart';
+import '../../../../common/shared_prefs/shared_prefs_service.dart';
 import '../../data/client.dart';
 import '../../data/repositories/client_repository.dart';
 import '../cubit/client_picker_cubit.dart';
@@ -31,6 +32,10 @@ class ClientsBloc extends Bloc<ClientsEvent, ClientsState> {
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _clientsListener;
 
+  /// Povremena puna sinhronizacija, za slučaj da je delta-sync nešto
+  /// propustio (npr. Firestore je izbacio dokumente iz keša).
+  static const _fullSyncInterval = Duration(days: 7);
+
   List<Client> get clients => _clients;
 
   final List<Client> _clients = [];
@@ -47,31 +52,101 @@ class ClientsBloc extends Bloc<ClientsEvent, ClientsState> {
       return;
     }
 
+    await _clientsListener?.cancel();
+    _clients
+      ..clear()
+      // Klijenti iz Firestore keša se prikazuju odmah i ne troše readove.
+      ..addAll(await clientRepository.getCachedClients(organizationId: orgId));
+    if (_clients.isNotEmpty) {
+      _sortClients();
+      emit(ClientsFetchingSuccess(List.from(_clients)));
+    }
+
+    // Sa servera se onda čitaju samo klijenti izmijenjeni nakon posljednje
+    // izmjene koju već imamo. Bez updatedAt-a (prvo pokretanje, keš prije
+    // migracije) ili kad je prošlo dovoljno vremena, čitaju se svi.
+    final lastFullSync = await SharedPrefsService.instance.getClientsFullSyncAt(
+      orgId,
+    );
+    final isFullSyncDue =
+        lastFullSync == null ||
+        DateTime.now().difference(lastFullSync) > _fullSyncInterval;
+    final since = isFullSyncDue ? null : _latestUpdatedAt();
+
     _clientsListener = clientRepository
-        .fetchClients(organizationId: orgId)
-        .listen((snapshot) {
-          for (final change in snapshot.docChanges) {
-            final id = change.doc.id;
-            final client = Client.fromJson(change.doc.data() ?? {}, id);
+        .listenForClientChanges(organizationId: orgId, since: since)
+        .listen(
+          (snapshot) {
+            for (final change in snapshot.docChanges) {
+              final id = change.doc.id;
 
-            switch (change.type) {
-              case DocumentChangeType.added:
-                _clients.add(client);
-                break;
-              case DocumentChangeType.modified:
-                final index = _clients.indexWhere((c) => c.id == id);
-                if (index != -1) {
-                  _clients[index] = client;
-                }
-                break;
-              case DocumentChangeType.removed:
-                _clients.removeWhere((c) => c.id == id);
-                break;
+              switch (change.type) {
+                case DocumentChangeType.added:
+                case DocumentChangeType.modified:
+                  final client = Client.fromJson(change.doc.data() ?? {}, id);
+                  final index = _clients.indexWhere((c) => c.id == id);
+                  if (index != -1) {
+                    _clients[index] = client;
+                  } else {
+                    _clients.add(client);
+                  }
+                  break;
+                case DocumentChangeType.removed:
+                  // U delta modu "removed" znači samo da dokument trenutno ne
+                  // odgovara upitu (npr. lokalna izmjena čeka serverski
+                  // updatedAt). Klijenti se ne brišu, nego dobiju
+                  // isActive: false, pa ih tada ne uklanjamo.
+                  if (since == null) {
+                    _clients.removeWhere((c) => c.id == id);
+                  }
+                  break;
+              }
             }
-          }
+            _sortClients();
 
-          add(ClientsFetchRequested());
-        });
+            if (since == null && !snapshot.metadata.isFromCache) {
+              unawaited(
+                SharedPrefsService.instance.setClientsFullSyncAt(
+                  orgId,
+                  DateTime.now(),
+                ),
+              );
+            }
+
+            add(ClientsFetchRequested());
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            unawaited(
+              FirebaseCrashlytics.instance.recordError(error, stackTrace),
+            );
+            // da AppInitBloc ne ostane zaglavljen ako keš nije imao klijente
+            add(ClientsFetchRequested());
+          },
+        );
+  }
+
+  Timestamp? _latestUpdatedAt() {
+    Timestamp? latest;
+    for (final client in _clients) {
+      final updatedAt = client.updatedAt;
+      if (updatedAt != null &&
+          (latest == null || updatedAt.compareTo(latest) > 0)) {
+        latest = updatedAt;
+      }
+    }
+    return latest;
+  }
+
+  /// Najnoviji klijenti prvi, kao ranije orderBy('createdAt', descending).
+  void _sortClients() {
+    _clients.sort((a, b) {
+      final aCreatedAt = a.createdAt;
+      final bCreatedAt = b.createdAt;
+      // tek kreiran klijent još nema serverski createdAt
+      if (aCreatedAt == null) return bCreatedAt == null ? 0 : -1;
+      if (bCreatedAt == null) return 1;
+      return bCreatedAt.compareTo(aCreatedAt);
+    });
   }
 
   Future<void> _onFetchClients(
