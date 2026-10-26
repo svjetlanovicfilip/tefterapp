@@ -498,32 +498,38 @@ exports.notifySlotChange = onDocumentWrittenWithAuthContext(
     const slotEnd = (slot.endDateTime || slot.startDateTime)?.toDate?.();
     if (!slotEnd || slotEnd < new Date()) return; // termin je već prošao
 
-    const body = `${await describeSlot(orgId, slot)} · ${formatSlotTime(slot.startDateTime)}`;
+    const [slotDescription, actorName] = await Promise.all([
+      describeSlot(orgId, slot),
+      userDisplayName(slotActor(before, after, authUid)),
+    ]);
+    const body = `${slotDescription} · ${formatSlotTime(slot.startDateTime)}`;
 
     try {
-      await sendSlotNotifications({ orgId, slotId, recipients, body });
+      await sendSlotNotifications({ orgId, slotId, recipients, body, actorName });
     } catch (e) {
       console.error(`notifySlotChange failed for ${orgId}/${slotId}:`, e);
     }
   }
 );
 
+/** Ko je napravio promjenu: iz auth contexta, a za rezervu polja iz aplikacije. */
+function slotActor(before, after, authUid) {
+  if (authUid) return authUid;
+  return after ? after.lastModifiedBy : before?.deletedBy;
+}
+
 /** Vraća [{ uid, type }] gdje je type created | updated | deleted. */
 function slotNotificationRecipients(before, after, authUid) {
   const beforeIds = new Set(before?.employeeIds || []);
   const afterIds = new Set(after?.employeeIds || []);
 
-  let actor;
   const recipients = [];
 
   if (!before && after) {
-    actor = after.lastModifiedBy;
     afterIds.forEach((uid) => recipients.push({ uid, type: "created" }));
   } else if (before && !after) {
-    actor = before.deletedBy;
     beforeIds.forEach((uid) => recipients.push({ uid, type: "deleted" }));
   } else if (before && after && hasRelevantSlotChange(before, after)) {
-    actor = after.lastModifiedBy;
     // Za zaposlenog koji je tek dodat na termin to je novi termin, a za
     // onoga koji je uklonjen termin je otkazan.
     afterIds.forEach((uid) =>
@@ -534,9 +540,20 @@ function slotNotificationRecipients(before, after, authUid) {
     });
   }
 
-  if (authUid) actor = authUid;
-
+  const actor = slotActor(before, after, authUid);
   return recipients.filter((r) => r.uid && r.uid !== actor);
+}
+
+/** Username korisnika, a ako ga nema, ime i prezime. */
+async function userDisplayName(uid) {
+  if (!uid) return null;
+
+  const user = (await db.collection("users").doc(uid).get()).data();
+  const username = user?.username?.trim();
+  if (username) return username;
+
+  const fullName = `${user?.name || ""} ${user?.surname || ""}`.trim();
+  return fullName || null;
 }
 
 function hasRelevantSlotChange(before, after) {
@@ -596,7 +613,7 @@ function formatSlotTime(timestamp) {
   return `${WEEKDAYS[parts.weekday] || ""} ${parts.day}.${parts.month}. u ${parts.hour}:${parts.minute}`.trim();
 }
 
-async function sendSlotNotifications({ orgId, slotId, recipients, body }) {
+async function sendSlotNotifications({ orgId, slotId, recipients, body, actorName }) {
   const typeByUid = new Map(recipients.map((r) => [r.uid, r.type]));
   const uids = [...typeByUid.keys()];
 
@@ -620,7 +637,13 @@ async function sendSlotNotifications({ orgId, slotId, recipients, body }) {
 
     return {
       token,
-      notification: { title: SLOT_NOTIFICATION_TITLES[type], body },
+      notification: {
+        // npr. "Novi termin · Vladan"
+        title: actorName
+          ? `${SLOT_NOTIFICATION_TITLES[type]} · ${actorName}`
+          : SLOT_NOTIFICATION_TITLES[type],
+        body,
+      },
       data: { type, slotId, orgId },
       android: { priority: "high", notification: { sound: "default" } },
       apns: { payload: { aps: { sound: "default" } } },
