@@ -411,7 +411,19 @@ const INVALID_TOKEN_CODES = new Set([
   "messaging/invalid-argument",
 ]);
 
-const WEEKDAYS = { Mon: "pon", Tue: "uto", Wed: "sri", Thu: "čet", Fri: "pet", Sat: "sub", Sun: "ned" };
+// "{username} je dodao termin za tebe na dan 10.10.2026 u 16h"
+const SLOT_NOTIFICATION_ACTIONS = {
+  created: "je dodao termin",
+  updated: "je izmijenio termin",
+  deleted: "je otkazao termin",
+};
+
+// Kad nije poznato ko je napravio promjenu.
+const SLOT_NOTIFICATION_ACTIONS_WITHOUT_ACTOR = {
+  created: "Dodat je termin",
+  updated: "Izmijenjen je termin",
+  deleted: "Otkazan je termin",
+};
 
 // Token je predug i ima znakove nepogodne za id dokumenta, pa koristimo hash.
 // Isti uređaj uvijek pogađa isti dokument, pa kad se na uređaju prijavi drugi
@@ -498,14 +510,11 @@ exports.notifySlotChange = onDocumentWrittenWithAuthContext(
     const slotEnd = (slot.endDateTime || slot.startDateTime)?.toDate?.();
     if (!slotEnd || slotEnd < new Date()) return; // termin je već prošao
 
-    const [slotDescription, actorName] = await Promise.all([
-      describeSlot(orgId, slot),
-      userDisplayName(slotActor(before, after, authUid)),
-    ]);
-    const body = `${slotDescription} · ${formatSlotTime(slot.startDateTime)}`;
+    const actorName = await userDisplayName(slotActor(before, after, authUid));
+    const slotTime = formatSlotTime(slot.startDateTime);
 
     try {
-      await sendSlotNotifications({ orgId, slotId, recipients, body, actorName });
+      await sendSlotNotifications({ orgId, slotId, recipients, actorName, slotTime });
     } catch (e) {
       console.error(`notifySlotChange failed for ${orgId}/${slotId}:`, e);
     }
@@ -568,30 +577,7 @@ function hasRelevantSlotChange(before, after) {
   );
 }
 
-async function describeSlot(orgId, slot) {
-  if (slot.clientName) return slot.clientName;
-
-  const orgRef = db.collection("organizations").doc(orgId);
-
-  if (slot.clientId) {
-    const clientSnap = await orgRef.collection("clients").doc(slot.clientId).get();
-    const clientName = clientSnap.data()?.name;
-    if (clientName) return clientName;
-  }
-
-  const serviceIds = slot.serviceIds || [];
-  if (serviceIds.length > 0) {
-    const serviceSnaps = await db.getAll(
-      ...serviceIds.map((id) => orgRef.collection("services").doc(id))
-    );
-    const titles = serviceSnaps.map((snap) => snap.data()?.title).filter(Boolean);
-    if (titles.length > 0) return titles.join(", ");
-  }
-
-  return "Termin";
-}
-
-/** npr. "pon 27.10. u 14:30" u lokalnom vremenu salona. */
+/** npr. "10.10.2026 u 16h" ili "10.10.2026 u 16:30h" u lokalnom vremenu salona. */
 function formatSlotTime(timestamp) {
   const date = timestamp?.toDate?.();
   if (!date) return "";
@@ -599,10 +585,10 @@ function formatSlotTime(timestamp) {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-GB", {
       timeZone: SLOT_TIME_ZONE,
-      weekday: "short",
-      day: "numeric",
-      month: "numeric",
-      hour: "2-digit",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "numeric",
       minute: "2-digit",
       hourCycle: "h23",
     })
@@ -610,10 +596,18 @@ function formatSlotTime(timestamp) {
       .map((part) => [part.type, part.value])
   );
 
-  return `${WEEKDAYS[parts.weekday] || ""} ${parts.day}.${parts.month}. u ${parts.hour}:${parts.minute}`.trim();
+  const time = parts.minute === "00" ? parts.hour : `${parts.hour}:${parts.minute}`;
+  return `${parts.day}.${parts.month}.${parts.year} u ${time}h`;
 }
 
-async function sendSlotNotifications({ orgId, slotId, recipients, body, actorName }) {
+function slotNotificationBody(type, actorName, slotTime) {
+  const action = actorName
+    ? `${actorName} ${SLOT_NOTIFICATION_ACTIONS[type]}`
+    : SLOT_NOTIFICATION_ACTIONS_WITHOUT_ACTOR[type];
+  return `${action} za tebe na dan ${slotTime}`;
+}
+
+async function sendSlotNotifications({ orgId, slotId, recipients, actorName, slotTime }) {
   const typeByUid = new Map(recipients.map((r) => [r.uid, r.type]));
   const uids = [...typeByUid.keys()];
 
@@ -638,11 +632,8 @@ async function sendSlotNotifications({ orgId, slotId, recipients, body, actorNam
     return {
       token,
       notification: {
-        // npr. "Novi termin · Vladan"
-        title: actorName
-          ? `${SLOT_NOTIFICATION_TITLES[type]} · ${actorName}`
-          : SLOT_NOTIFICATION_TITLES[type],
-        body,
+        title: SLOT_NOTIFICATION_TITLES[type],
+        body: slotNotificationBody(type, actorName, slotTime),
       },
       data: { type, slotId, orgId },
       android: { priority: "high", notification: { sound: "default" } },
