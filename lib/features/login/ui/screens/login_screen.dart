@@ -46,7 +46,7 @@ class _LoginScreenState extends State<LoginScreen> {
           bloc: _appInitBloc,
           listener: (context, state) {
             if (state is AppInitReady) {
-              context.pushReplacementNamed(Routes.home, arguments: state.slots);
+              context.pushReplacementNamed(Routes.home);
             }
           },
         ),

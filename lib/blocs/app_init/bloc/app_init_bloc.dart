@@ -68,12 +68,12 @@ class AppInitBloc extends Bloc<AppInitEvent, AppInitState> {
     clientsBloc.add(ClientsInitListener());
 
     final results = await Future.wait([
-      slotBloc.stream.firstWhere((s) => s is LoadedRangeSlots),
+      slotBloc.stream.firstWhere((s) => s is SlotsLoaded),
       serviceBloc.stream.firstWhere((s) => s.status == ServiceStatus.loaded),
       usersBloc.stream.firstWhere((s) => s is UsersFetchingSuccess),
       clientsBloc.stream.firstWhere((s) => s is ClientsFetchingSuccess),
     ]);
 
-    return (results[0] as LoadedRangeSlots).slots;
+    return (results[0] as SlotsLoaded).slots;
   }
 }

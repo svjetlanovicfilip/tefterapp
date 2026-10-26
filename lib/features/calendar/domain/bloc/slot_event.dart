@@ -6,43 +6,14 @@ sealed class SlotEvent {
 
 class InitListener extends SlotEvent {}
 
-class LoadSlots extends SlotEvent {
-  const LoadSlots({
-    required this.userId,
-    required this.changedSlotIds,
-    required this.removedSlotIds,
-  });
-  final String userId;
-  final List<String> changedSlotIds;
-  final List<String> removedSlotIds;
-}
-
-class LoadMoreForward extends SlotEvent {
-  const LoadMoreForward({required this.currentDisplayedDate, this.days = 14});
-  final int days;
-  final DateTime currentDisplayedDate;
-}
-
-class LoadMoreBackward extends SlotEvent {
-  const LoadMoreBackward({required this.currentDisplayedDate, this.days = 14});
-  final DateTime currentDisplayedDate;
-  final int days;
-}
-
-class JumpToDate extends SlotEvent {
-  const JumpToDate({required this.date});
-  final DateTime date;
-}
-
-class LoadMore extends SlotEvent {
-  const LoadMore({required this.date});
+class DisplayedDateChanged extends SlotEvent {
+  const DisplayedDateChanged({required this.date});
   final DateTime date;
 }
 
 class UserChanged extends SlotEvent {
-  const UserChanged({required this.userId, required this.currentDisplayedDate});
+  const UserChanged({required this.userId});
   final String userId;
-  final DateTime currentDisplayedDate;
 }
 
 class AddNewSlot extends SlotEvent {
@@ -58,4 +29,23 @@ class UpdateSlot extends SlotEvent {
 class DeleteSlot extends SlotEvent {
   const DeleteSlot(this.slotId);
   final String slotId;
+}
+
+class _WeekSnapshotArrived extends SlotEvent {
+  const _WeekSnapshotArrived({
+    required this.week,
+    required this.listenerId,
+    required this.snapshot,
+  });
+  final DateTime week;
+  final int listenerId;
+  final QuerySnapshot<Map<String, dynamic>> snapshot;
+}
+
+class _ClockTicked extends SlotEvent {}
+
+class _WeekListenerFailed extends SlotEvent {
+  const _WeekListenerFailed({required this.error, required this.stackTrace});
+  final Object error;
+  final StackTrace stackTrace;
 }

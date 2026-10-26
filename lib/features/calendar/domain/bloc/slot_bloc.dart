@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:bloc/bloc.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:collection/collection.dart';
 import 'package:equatable/equatable.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 import '../../../../common/di/di_container.dart';
 import '../../data/models/slot.dart';
@@ -12,23 +12,19 @@ import '../../data/repositories/calendar_repository.dart';
 part 'slot_event.dart';
 part 'slot_state.dart';
 
-class UserSlotsRange {
-  UserSlotsRange({required this.userId, required this.from, required this.to});
-
-  String userId;
-  DateTime from;
-  DateTime to;
-}
-
+/// Termini se slušaju po sedmicama (ponedjeljak 00:00 - sljedeći ponedjeljak
+/// 00:00) za cijelu organizaciju. Uvijek su žive tekuća i sljedeća sedmica
+/// (da promjene za danas i narednih 7 dana stižu odmah, gdje god korisnik
+/// bio u kalendaru) i prikazana sedmica ±1. Sve ostale sedmice se gase, tako
+/// da broj aktivnih listenera nikad ne prelazi 5.
 class SlotBloc extends Bloc<SlotEvent, SlotState> {
   SlotBloc(this.calendarRepository) : super(const SlotStateInitial()) {
     on<InitListener>(_onInit);
-    on<LoadSlots>(_onLoadSlots);
-    on<LoadMore>(_onLoadMore);
-
-    on<LoadMoreBackward>(_onLoadMoreBackward);
-    on<LoadMoreForward>(_onLoadMoreForward);
+    on<DisplayedDateChanged>(_onDisplayedDateChanged);
     on<UserChanged>(_onUserChanged);
+    on<_WeekSnapshotArrived>(_onWeekSnapshotArrived);
+    on<_WeekListenerFailed>(_onWeekListenerFailed);
+    on<_ClockTicked>(_onClockTicked);
     on<AddNewSlot>(_onAddNewSlot);
     on<UpdateSlot>(_onUpdateSlot);
     on<DeleteSlot>(_onDeleteSlot);
@@ -36,280 +32,255 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
 
   final CalendarRepository calendarRepository;
 
-  final List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>
-  _slotsListeners = [];
+  final _weekListeners =
+      <DateTime, StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>{};
+  final _weekSlots = <DateTime, Map<String, Slot>>{};
 
-  final _usersSlots = <String, List<Slot>>{};
-  final _usersSlotsRanges = <UserSlotsRange>[];
+  /// Id aktivnog listenera po sedmici. Snapshot ugašenog listenera koji je
+  /// još čekao u redu događaja se ignoriše.
+  final _weekListenerIds = <DateTime, int>{};
+  int _nextListenerId = 0;
 
-  void _onLoadMore(LoadMore event, Emitter<SlotState> emit) {
-    final userId = appState.currentSelectedUserId ?? '';
-    final currentRange = _usersSlotsRanges.firstWhere(
-      (e) => e.userId == userId,
-    );
+  /// Sedmice za koje je stigao snapshot sa servera, pa su podaci potpuni.
+  final _loadedWeeks = <DateTime>{};
 
-    final to = currentRange.to;
-    final from = currentRange.from;
+  DateTime _displayedDate = DateTime.now();
+  int _version = 0;
 
-    //scroll to right
-    if (!to.subtract(const Duration(days: 15)).isAfter(event.date)) {
-      final newTo = to.add(const Duration(days: 14));
+  /// Provjerava da li je počela nova sedmica dok je aplikacija otvorena, da
+  /// se sidro (tekuća + sljedeća sedmica) pomjeri i bez navigacije. Dok je
+  /// aplikacija u pozadini tajmer miruje, pa se provjera desi po povratku.
+  Timer? _clockTimer;
+  DateTime? _anchorWeek;
 
-      currentRange.to = newTo;
+  /// Svi trenutno učitani termini organizacije (svi zaposleni).
+  List<Slot> get slots =>
+      _weekSlots.values.expand((weekSlots) => weekSlots.values).toList();
 
-      _attachNewSlotListener(userId: userId, from: to, to: newTo);
+  static DateTime _weekStart(DateTime date) =>
+      DateTime(date.year, date.month, date.day - (date.weekday - 1));
+
+  static DateTime _addWeeks(DateTime weekStart, int weeks) =>
+      DateTime(weekStart.year, weekStart.month, weekStart.day + 7 * weeks);
+
+  Set<DateTime> _desiredWeeks() {
+    final currentWeek = _anchorWeek = _weekStart(DateTime.now());
+    final displayedWeek = _weekStart(_displayedDate);
+
+    return {
+      currentWeek,
+      _addWeeks(currentWeek, 1),
+      _addWeeks(displayedWeek, -1),
+      displayedWeek,
+      _addWeeks(displayedWeek, 1),
+    };
+  }
+
+  void _syncWeekListeners(Emitter<SlotState> emit) {
+    final desiredWeeks = _desiredWeeks();
+
+    final obsoleteWeeks =
+        _weekListeners.keys
+            .where((week) => !desiredWeeks.contains(week))
+            .toList();
+    for (final week in obsoleteWeeks) {
+      unawaited(_weekListeners.remove(week)?.cancel());
+      _weekListenerIds.remove(week);
+      _weekSlots.remove(week);
+      _loadedWeeks.remove(week);
     }
 
-    //scroll to left
-    if (!event.date.isAfter(from.add(const Duration(days: 8)))) {
-      final newFrom = from.subtract(const Duration(days: 14));
-      currentRange.from = newFrom;
+    for (final week in desiredWeeks) {
+      if (_weekListeners.containsKey(week)) continue;
 
-      _attachNewSlotListener(userId: userId, from: newFrom, to: from);
+      final listenerId = _nextListenerId++;
+      _weekListenerIds[week] = listenerId;
+      _weekListeners[week] = calendarRepository
+          .listenForSlotsStartingBetween(from: week, to: _addWeeks(week, 1))
+          .listen(
+            (snapshot) => add(
+              _WeekSnapshotArrived(
+                week: week,
+                listenerId: listenerId,
+                snapshot: snapshot,
+              ),
+            ),
+            onError:
+                (Object error, StackTrace stackTrace) => add(
+                  _WeekListenerFailed(error: error, stackTrace: stackTrace),
+                ),
+          );
+    }
+
+    if (obsoleteWeeks.isNotEmpty) {
+      _emitLoaded(emit);
     }
   }
 
-  void _onLoadSlots(LoadSlots event, Emitter<SlotState> emit) {
-    emit(const SlotStateInitial());
-    final currentRange = _usersSlotsRanges.firstWhere(
-      (e) => event.userId == e.userId,
-    );
-
+  void _emitLoaded(Emitter<SlotState> emit) {
     emit(
-      LoadedRangeSlots(
-        slots: List.from(_usersSlots[event.userId] ?? []),
-        loadedFrom: currentRange.from,
-        loadedTo: currentRange.to,
-        userId: event.userId,
-        changedSlotIds: event.changedSlotIds,
-        removedSlotIds: event.removedSlotIds,
+      SlotsLoaded(
+        slots: slots,
+        selectedUserId: appState.currentSelectedUserId ?? '',
+        version: ++_version,
       ),
     );
   }
 
-  Future<void> _onInit(_, Emitter<SlotState> emit) async {
+  void _cancelAllListeners() {
+    _clockTimer?.cancel();
+    _clockTimer = null;
+    for (final listener in _weekListeners.values) {
+      unawaited(listener.cancel());
+    }
+    _weekListeners.clear();
+    _weekListenerIds.clear();
+    _weekSlots.clear();
+    _loadedWeeks.clear();
+  }
+
+  void _onInit(InitListener event, Emitter<SlotState> emit) {
     emit(const SlotStateLoading());
 
-    final userId = appState.currentSelectedUserId ?? '';
+    _cancelAllListeners();
+    _displayedDate = DateTime.now();
+    _syncWeekListeners(emit);
 
-    final from = DateTime.now().subtract(const Duration(days: 14));
-    final to = DateTime.now().add(const Duration(days: 30));
-
-    if (!_usersSlotsRanges.any((e) => e.userId == userId)) {
-      _usersSlotsRanges.add(UserSlotsRange(userId: userId, from: from, to: to));
-    }
-
-    _attachNewSlotListener(userId: userId, from: from, to: to);
-  }
-
-  void _attachNewSlotListener({
-    required String userId,
-    required DateTime from,
-    required DateTime to,
-  }) {
-    //for every range we need to attach a new listener
-    _slotsListeners.add(
-      calendarRepository
-          .listenForNewChanges(userId: userId, from: from, to: to)
-          .listen((snapshot) {
-            final changedSlotIds = <String>[];
-            final removedSlotIds = <String>[];
-
-            for (final change in snapshot.docChanges) {
-              final id = change.doc.id;
-              final slot = Slot.fromJson(change.doc.data() ?? {}, id);
-
-              switch (change.type) {
-                case DocumentChangeType.added:
-                case DocumentChangeType.modified:
-                  _usersSlots[userId] ??= [];
-                  if (!slot.employeeIds.contains(userId)) {
-                    _usersSlots[userId]?.removeWhere((s) => s.id == id);
-                    removedSlotIds.add(id);
-                    break;
-                  }
-
-                  final index = _usersSlots[userId]!.indexWhere(
-                    (s) => s.id == slot.id,
-                  );
-                  if (index >= 0) {
-                    _usersSlots[userId]![index] = slot;
-                    changedSlotIds.add(id);
-                  } else {
-                    _usersSlots[userId]!.add(slot);
-                  }
-                  break;
-                case DocumentChangeType.removed:
-                  _usersSlots[userId]?.removeWhere((s) => s.id == id);
-                  removedSlotIds.add(id);
-                  break;
-              }
-            }
-
-            if (appState.currentSelectedUserId == userId) {
-              add(
-                LoadSlots(
-                  userId: userId,
-                  changedSlotIds: changedSlotIds,
-                  removedSlotIds: removedSlotIds,
-                ),
-              );
-            }
-          }),
+    _clockTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => add(_ClockTicked()),
     );
   }
 
-  Future<void> _onUserChanged(UserChanged e, Emitter<SlotState> emit) async {
-    if (e.userId == appState.currentSelectedUserId) {
+  void _onClockTicked(_ClockTicked event, Emitter<SlotState> emit) {
+    if (_weekStart(DateTime.now()) != _anchorWeek) {
+      _syncWeekListeners(emit);
+    }
+  }
+
+  void _onDisplayedDateChanged(
+    DisplayedDateChanged event,
+    Emitter<SlotState> emit,
+  ) {
+    _displayedDate = event.date;
+    _syncWeekListeners(emit);
+  }
+
+  void _onUserChanged(UserChanged event, Emitter<SlotState> emit) {
+    if (event.userId == appState.currentSelectedUserId) {
       return;
     }
 
-    final currentRange = _usersSlotsRanges.firstWhereOrNull(
-      (element) => element.userId == e.userId,
-    );
+    // Termini svih zaposlenih su već učitani, filter je lokalni.
+    appState.currentSelectedUserId = event.userId;
+    _emitLoaded(emit);
+  }
 
-    appState.currentSelectedUserId = e.userId;
+  void _onWeekSnapshotArrived(
+    _WeekSnapshotArrived event,
+    Emitter<SlotState> emit,
+  ) {
+    // Snapshot može stići nakon što je listener za tu sedmicu već ugašen
+    // (i možda zamijenjen novim).
+    if (_weekListenerIds[event.week] != event.listenerId) {
+      return;
+    }
 
-    if (currentRange != null) {
-      emit(
-        LoadedSlotsAfterUserChanged(
-          slots: List.from(_usersSlots[e.userId] ?? []),
-          loadedFrom: currentRange.from,
-          loadedTo: currentRange.to,
-          userId: e.userId,
-        ),
-      );
+    final weekSlots = _weekSlots.putIfAbsent(event.week, () => {});
+    for (final change in event.snapshot.docChanges) {
+      final id = change.doc.id;
 
-      if (_usersSlotsRanges.any((element) => element.userId == e.userId)) {
-        if (e.currentDisplayedDate.isBefore(currentRange.from)) {
-          final desiredFrom = e.currentDisplayedDate.subtract(
-            const Duration(days: 14),
-          );
-          _attachNewSlotListener(
-            userId: e.userId,
-            from: desiredFrom,
-            to: currentRange.from,
-          );
-
-          currentRange.from = desiredFrom;
-        } else if (e.currentDisplayedDate.isAfter(currentRange.to)) {
-          final desiredTo = e.currentDisplayedDate.add(
-            const Duration(days: 14),
-          );
-
-          _attachNewSlotListener(
-            userId: e.userId,
-            from: currentRange.to,
-            to: desiredTo,
-          );
-
-          currentRange.to = desiredTo;
-        }
+      switch (change.type) {
+        case DocumentChangeType.added:
+        case DocumentChangeType.modified:
+          weekSlots[id] = Slot.fromJson(change.doc.data() ?? {}, id);
+          break;
+        case DocumentChangeType.removed:
+          weekSlots.remove(id);
+          break;
       }
-    } else {
-      final desiredFrom = e.currentDisplayedDate.subtract(
-        const Duration(days: 14),
-      );
-      final desiredTo = e.currentDisplayedDate.add(const Duration(days: 30));
-
-      _usersSlotsRanges.add(
-        UserSlotsRange(userId: e.userId, from: desiredFrom, to: desiredTo),
-      );
-
-      _attachNewSlotListener(
-        userId: e.userId,
-        from: desiredFrom,
-        to: desiredTo,
-      );
     }
+
+    // Snapshot iz keša može biti nepotpun, pa se na njega ne oslanja
+    // lokalna provjera preklapanja.
+    if (!event.snapshot.metadata.isFromCache) {
+      _loadedWeeks.add(event.week);
+    }
+    _emitLoaded(emit);
   }
 
-  Future<void> _onLoadMoreForward(
-    LoadMoreForward e,
+  void _onWeekListenerFailed(
+    _WeekListenerFailed event,
     Emitter<SlotState> emit,
-  ) async {
-    final userId = appState.currentSelectedUserId ?? '';
-    final currentRange = _usersSlotsRanges.firstWhere(
-      (e) => e.userId == userId,
+  ) {
+    unawaited(
+      FirebaseCrashlytics.instance.recordError(event.error, event.stackTrace),
     );
-
-    final to = currentRange.to;
-
-    if (to.subtract(const Duration(days: 15)).isAfter(e.currentDisplayedDate)) {
-      return;
-    }
-
-    late DateTime newTo;
-
-    if (e.currentDisplayedDate.isAfter(to.add(Duration(days: e.days)))) {
-      newTo = e.currentDisplayedDate.add(Duration(days: e.days));
-    } else {
-      newTo = to.add(Duration(days: e.days));
-    }
-
-    currentRange.to = newTo;
-
-    _attachNewSlotListener(userId: userId, from: to, to: newTo);
+    // Emitujemo ono što imamo da AppInitBloc ne bi ostao zaglavljen na splashu.
+    _emitLoaded(emit);
   }
 
-  Future<void> _onLoadMoreBackward(
-    LoadMoreBackward e,
-    Emitter<SlotState> emit,
-  ) async {
-    final userId = appState.currentSelectedUserId ?? '';
-    final currentRange = _usersSlotsRanges.firstWhere(
-      (e) => e.userId == userId,
+  /// Ako su sve sedmice koje termin može dodirnuti žive, preklapanje se
+  /// provjerava lokalno, bez ijednog reada.
+  Future<bool?> _isOverlapping(Slot slot, String userId) async {
+    final start = slot.startDateTime;
+    final end = slot.endDateTime!;
+
+    // Termin iz prethodne sedmice može trajati preko ponoći u novu sedmicu.
+    final weeksToCheck = {
+      _weekStart(start.subtract(const Duration(days: 1))),
+      _weekStart(start),
+      _weekStart(end),
+    };
+
+    if (_loadedWeeks.containsAll(weeksToCheck)) {
+      return slots.any(
+        (other) =>
+            other.id != slot.id &&
+            other.employeeIds.contains(userId) &&
+            other.startDateTime.isBefore(end) &&
+            (other.endDateTime ?? other.startDateTime).isAfter(start),
+      );
+    }
+
+    final result = await calendarRepository.isSlotOverlapping(
+      newStart: start,
+      newEnd: end,
+      userId: userId,
+      excludeSlotId: slot.id,
     );
 
-    final from = currentRange.from;
+    return result.isFailure ? null : result.success;
+  }
 
-    if (e.currentDisplayedDate.isAfter(from.add(const Duration(days: 8)))) {
-      return;
+  /// Vraća poruku greške ili null ako je termin validan.
+  Future<String?> _validateSlot(Slot slot) async {
+    if (slot.endDateTime == null) {
+      return 'Molimo Vas izaberite početak i kraj termina.';
     }
 
-    late DateTime newFrom;
+    for (final userId in slot.employeeIds) {
+      final isOverlapping = await _isOverlapping(slot, userId);
 
-    if (e.currentDisplayedDate.isBefore(
-      from.subtract(Duration(days: e.days)),
-    )) {
-      newFrom = e.currentDisplayedDate.subtract(Duration(days: e.days));
-    } else {
-      newFrom = from.subtract(Duration(days: e.days));
+      if (isOverlapping == null) {
+        return 'Provjera termina nije uspjela. Provjerite internet konekciju i pokušajte ponovo.';
+      }
+
+      if (isOverlapping) {
+        return 'Termin se preklapa s drugim terminom. Molimo Vas izaberite drugi termin.';
+      }
     }
 
-    currentRange.from = newFrom;
-
-    _attachNewSlotListener(userId: userId, from: newFrom, to: from);
+    return null;
   }
 
   Future<void> _onAddNewSlot(AddNewSlot e, Emitter<SlotState> emit) async {
     emit(const SlotStateInitial());
 
-    if (e.slot.endDateTime == null) {
-      emit(
-        const ErrorLoadingSlots(
-          errorMessage: 'Molimo Vas izaberite početak i kraj termina.',
-        ),
-      );
+    final errorMessage = await _validateSlot(e.slot);
+    if (errorMessage != null) {
+      emit(ErrorLoadingSlots(errorMessage: errorMessage));
       return;
-    }
-
-    for (final userId in e.slot.employeeIds) {
-      final isOverlapping = await calendarRepository.isSlotOverlapping(
-        newStart: e.slot.startDateTime,
-        newEnd: e.slot.endDateTime!,
-        userId: userId,
-      );
-
-      if ((isOverlapping.success ?? false) || isOverlapping.isFailure) {
-        emit(
-          const ErrorLoadingSlots(
-            errorMessage:
-                'Termin se preklapa s drugim terminom. Molimo Vas izaberite drugi termin.',
-          ),
-        );
-        return;
-      }
     }
 
     final result = await calendarRepository.createSlot(e.slot);
@@ -322,37 +293,13 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
   Future<void> _onUpdateSlot(UpdateSlot e, Emitter<SlotState> emit) async {
     emit(const SlotStateInitial());
 
-    final slot = e.slot;
-
-    if (slot.endDateTime == null) {
-      emit(
-        const ErrorLoadingSlots(
-          errorMessage: 'Molimo Vas izaberite početak i kraj termina.',
-        ),
-      );
+    final errorMessage = await _validateSlot(e.slot);
+    if (errorMessage != null) {
+      emit(ErrorLoadingSlots(errorMessage: errorMessage));
       return;
     }
 
-    for (final userId in slot.employeeIds) {
-      final isOverlapping = await calendarRepository.isSlotOverlapping(
-        newStart: slot.startDateTime,
-        newEnd: slot.endDateTime!,
-        userId: userId,
-        excludeSlotId: slot.id,
-      );
-
-      if ((isOverlapping.success ?? false) || isOverlapping.isFailure) {
-        emit(
-          const ErrorLoadingSlots(
-            errorMessage:
-                'Termin se preklapa s drugim terminom. Molimo Vas izaberite drugi termin.',
-          ),
-        );
-        return;
-      }
-    }
-
-    final result = await calendarRepository.updateSlot(slot);
+    final result = await calendarRepository.updateSlot(e.slot);
     if (result.isFailure) {
       emit(ErrorLoadingSlots(errorMessage: result.failure?.toString() ?? ''));
       return;
@@ -368,8 +315,12 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
   }
 
   void clearState() {
-    _usersSlots.clear();
-    _usersSlotsRanges.clear();
-    _slotsListeners.clear();
+    _cancelAllListeners();
+  }
+
+  @override
+  Future<void> close() {
+    _cancelAllListeners();
+    return super.close();
   }
 }

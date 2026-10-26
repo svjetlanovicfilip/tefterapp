@@ -105,10 +105,7 @@ class _MyAppState extends State<MyApp> {
               );
             case Routes.home:
               return CupertinoPageRoute(
-                builder:
-                    (context) => HomeScreen(
-                      slots: settings.arguments as List<Slot>? ?? [],
-                    ),
+                builder: (context) => const HomeScreen(),
               );
             case Routes.settings:
               return CupertinoPageRoute(

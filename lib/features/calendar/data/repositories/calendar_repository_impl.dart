@@ -11,27 +11,19 @@ class CalendarRepositoryImpl implements CalendarRepository {
   final CalendarRemoteDatasource calendarRemoteDatasource;
 
   @override
-  Stream<QuerySnapshot<Map<String, dynamic>>> listenForNewChanges({
-    required String userId,
+  Stream<QuerySnapshot<Map<String, dynamic>>> listenForSlotsStartingBetween({
     required DateTime from,
     required DateTime to,
   }) {
-    return calendarRemoteDatasource.listenForNewChanges(
-      userId: userId,
+    return calendarRemoteDatasource.listenForSlotsStartingBetween(
       from: from,
       to: to,
     );
   }
 
   @override
-  Stream<QuerySnapshot<Map<String, dynamic>>> listenForNewChangesByDateRange({
-    required DateTime from,
-    required DateTime to,
-  }) {
-    return calendarRemoteDatasource.listenForNewChangesByDateRange(
-      from: from,
-      to: to,
-    );
+  Future<Result<Slot?, Exception>> getSlotById(String slotId) {
+    return calendarRemoteDatasource.getSlotById(slotId);
   }
 
   @override

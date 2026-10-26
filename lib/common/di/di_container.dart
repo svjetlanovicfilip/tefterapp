@@ -11,7 +11,6 @@ import '../../features/authentication/domain/bloc/authentication_bloc.dart';
 import '../../features/calendar/data/datasources/calendar_remote_datasource.dart';
 import '../../features/calendar/data/repositories/calendar_repository.dart';
 import '../../features/calendar/data/repositories/calendar_repository_impl.dart';
-import '../../features/calendar/domain/bloc/employees_calendar_bloc.dart';
 import '../../features/calendar/domain/bloc/slot_bloc.dart';
 import '../../features/client_history/data/datasources/client_history_remote_datasource.dart';
 import '../../features/client_history/data/repositories/client_history_repository.dart';
@@ -61,11 +60,6 @@ void setupDependencies() {
     //services
     ..registerSingleton<FirebaseRemoteConfigService>(
       FirebaseRemoteConfigService(),
-    )
-    ..registerLazySingleton<EmployeesCalendarBloc>(
-      () => EmployeesCalendarBloc(
-        calendarRepository: getIt<CalendarRepository>(),
-      ),
     )
     ..registerSingleton<ForceUpdateService>(
       ForceUpdateService(getIt<FirebaseRemoteConfigService>()),

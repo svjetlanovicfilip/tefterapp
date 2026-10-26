@@ -201,11 +201,7 @@ class CalendarDayView extends StatelessWidget {
       },
 
       onPageChange: (date, page) {
-        if (date.isAfter(DateTime.now())) {
-          _slotBloc.add(LoadMoreForward(currentDisplayedDate: date));
-        } else {
-          _slotBloc.add(LoadMoreBackward(currentDisplayedDate: date));
-        }
+        _slotBloc.add(DisplayedDateChanged(date: date));
       },
       onDateTap: (date) {
         // generateTestData();

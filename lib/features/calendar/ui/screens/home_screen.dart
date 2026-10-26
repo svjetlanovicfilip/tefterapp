@@ -24,9 +24,7 @@ import '../widgets/calendar_week_view.dart';
 import 'book_appointment_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({required this.slots, super.key});
-
-  final List<Slot> slots;
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -41,24 +39,62 @@ class _HomeScreenState extends State<HomeScreen> {
   final _dayViewKey = GlobalKey<DayViewState>();
   final _weekViewKey = GlobalKey<WeekViewState>();
   final _filterIconKey = GlobalKey();
-  bool _initializedFromArgs = false;
+
+  /// Termini koji su trenutno u EventController-u, po id-u.
+  final _displayedSlots = <String, Slot>{};
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initializedFromArgs) return;
-
-    final newSlots =
-        widget.slots.map((slot) => slot.toCalendarEventData()).toList();
+  void initState() {
+    super.initState();
 
     // Defer controller updates until after the first frame to avoid
     // setState/markNeedsBuild during build of ancestor widgets.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      CalendarControllerProvider.of<Slot>(context).controller.addAll(newSlots);
+      final controller =
+          CalendarControllerProvider.of<Slot>(context).controller
+            // kontroler živi duže od ekrana, pa mogu ostati termini prethodne sesije
+            ..removeWhere((_) => true);
+      final selectedUserId = appState.currentSelectedUserId;
+      _syncCalendarEvents(
+        controller,
+        _slotBloc.slots
+            .where((slot) => slot.employeeIds.contains(selectedUserId))
+            .toList(),
+      );
     });
 
-    _initializedFromArgs = true;
+  }
+
+  /// Mijenja samo termine koji su dodani, izmijenjeni ili obrisani, umjesto
+  /// da na svaku promjenu briše i ponovo dodaje sve.
+  void _syncCalendarEvents(EventController<Slot> controller, List<Slot> slots) {
+    final newSlots = {
+      for (final slot in slots)
+        if (slot.id != null) slot.id!: slot,
+    };
+
+    final removedIds =
+        _displayedSlots.keys
+            .where((id) => _displayedSlots[id] != newSlots[id])
+            .toSet();
+    final addedSlots =
+        newSlots.values
+            .where((slot) => _displayedSlots[slot.id] != slot)
+            .toList();
+
+    if (removedIds.isNotEmpty) {
+      controller.removeWhere((event) => removedIds.contains(event.event?.id));
+    }
+    if (addedSlots.isNotEmpty) {
+      controller.addAll(
+        addedSlots.map((slot) => slot.toCalendarEventData()).toList(),
+      );
+    }
+
+    _displayedSlots
+      ..clear()
+      ..addAll(newSlots);
   }
 
   @override
@@ -66,38 +102,22 @@ class _HomeScreenState extends State<HomeScreen> {
     return BlocConsumer<SlotBloc, SlotState>(
       bloc: _slotBloc,
       listenWhen: (previous, current) => previous != current,
+      // Termini idu kroz listener u EventController, pa se ekran builda
+      // samo kad se uđe u loading ili izađe iz njega.
+      buildWhen:
+          (previous, current) =>
+              previous is SlotStateLoading || current is SlotStateLoading,
       listener: (context, state) {
         if (state is ErrorLoadingSlots) {
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(SnackBar(content: Text(state.errorMessage)));
           return;
-        } else if (state is LoadedRangeSlots) {
-          final newSlots =
-              state.slots.map((slot) => slot.toCalendarEventData()).toList();
-
-          final controller =
-              CalendarControllerProvider.of<Slot>(context).controller;
-
-          // snapshot prevents ConcurrentModificationError
-          final oldSlots = List.of(controller.allEvents);
-
-          controller
-            ..removeAll(oldSlots)
-            ..addAll(newSlots);
-        } else if (state is LoadedSlotsAfterUserChanged) {
-          final newSlots =
-              state.slots.map((slot) => slot.toCalendarEventData()).toList();
-
-          final controller =
-              CalendarControllerProvider.of<Slot>(context).controller;
-
-          // snapshot prevents ConcurrentModificationError
-          final oldSlots = List.of(controller.allEvents);
-
-          controller
-            ..removeAll(oldSlots)
-            ..addAll(newSlots);
+        } else if (state is SlotsLoaded) {
+          _syncCalendarEvents(
+            CalendarControllerProvider.of<Slot>(context).controller,
+            state.selectedUserSlots,
+          );
         }
       },
       builder: (context, state) {
@@ -142,15 +162,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             filterIconKey: _filterIconKey,
                             onSelected: (userId) {
                               _usersBloc.add(SelectUser(userId: userId));
-                              _slotBloc.add(
-                                UserChanged(
-                                  userId: userId,
-                                  currentDisplayedDate:
-                                      _dayViewKey.currentState?.currentDate ??
-                                      _weekViewKey.currentState?.currentDate ??
-                                      DateTime.now(),
-                                ),
-                              );
+                              _slotBloc.add(UserChanged(userId: userId));
                             },
                             users: state.users,
                           ),
@@ -243,6 +255,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         return ToggleButtonGroup(
                           onSelectionChanged: (value) {
                             _calendarTypeViewCubit.toggleCalendarType(value);
+                            // Novi prikaz uvijek kreće od današnjeg dana.
+                            _slotBloc.add(
+                              DisplayedDateChanged(date: DateTime.now()),
+                            );
                           },
                           selectedCalendarType: calendarCubitState,
                         );

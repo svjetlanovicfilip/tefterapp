@@ -21,25 +21,23 @@ class SlotStateLoading extends SlotState {
   List<Object?> get props => [];
 }
 
-class LoadedRangeSlots extends SlotState {
-  const LoadedRangeSlots({
+class SlotsLoaded extends SlotState {
+  const SlotsLoaded({
     required this.slots,
-    required this.loadedFrom,
-    required this.loadedTo,
-    required this.userId,
-    required this.changedSlotIds,
-    required this.removedSlotIds,
+    required this.selectedUserId,
+    required this.version,
   });
 
+  /// Termini svih zaposlenih iz učitanih sedmica.
   final List<Slot> slots;
-  final DateTime loadedFrom;
-  final DateTime loadedTo;
-  final String userId;
-  final List<String> changedSlotIds;
-  final List<String> removedSlotIds;
+  final String selectedUserId;
+  final int version;
+
+  List<Slot> get selectedUserSlots =>
+      slots.where((slot) => slot.employeeIds.contains(selectedUserId)).toList();
 
   @override
-  List<Object?> get props => [slots, loadedFrom, loadedTo, userId];
+  List<Object?> get props => [version];
 }
 
 class ErrorLoadingSlots extends SlotState {
@@ -49,21 +47,4 @@ class ErrorLoadingSlots extends SlotState {
 
   @override
   List<Object?> get props => [errorMessage];
-}
-
-class LoadedSlotsAfterUserChanged extends SlotState {
-  const LoadedSlotsAfterUserChanged({
-    required this.slots,
-    required this.userId,
-    required this.loadedFrom,
-    required this.loadedTo,
-  });
-
-  final List<Slot> slots;
-  final String userId;
-  final DateTime loadedFrom;
-  final DateTime loadedTo;
-
-  @override
-  List<Object?> get props => [slots, userId, loadedFrom, loadedTo];
 }
