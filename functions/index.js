@@ -1,7 +1,12 @@
 const admin = require("firebase-admin");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const {
+  onDocumentCreated,
+  onDocumentWritten,
+  onDocumentWrittenWithAuthContext,
+} = require("firebase-functions/v2/firestore");
+const crypto = require("crypto");
 const { defineSecret } = require("firebase-functions/params");
 const functions = require("firebase-functions/v1");
 
@@ -287,3 +292,267 @@ exports.sendResetPasswordOnAuthCreate = functions
       return null;
     }
   });
+
+// ---------------------------------------------------------------------------
+// Push notifikacije za termine
+// ---------------------------------------------------------------------------
+
+const PUSH_TOKENS_COLLECTION = "pushTokens";
+const SLOT_TIME_ZONE = "Europe/Sarajevo";
+
+// Promjena nekog od ovih polja je bitna zaposlenima (napomena nije).
+const SLOT_NOTIFY_FIELDS = [
+  "startDateTime",
+  "endDateTime",
+  "employeeIds",
+  "clientId",
+  "serviceIds",
+];
+
+const SLOT_NOTIFICATION_TITLES = {
+  created: "Novi termin",
+  updated: "Termin izmijenjen",
+  deleted: "Termin otkazan",
+};
+
+const INVALID_TOKEN_CODES = new Set([
+  "messaging/registration-token-not-registered",
+  "messaging/invalid-registration-token",
+  "messaging/invalid-argument",
+]);
+
+const WEEKDAYS = { Mon: "pon", Tue: "uto", Wed: "sri", Thu: "čet", Fri: "pet", Sat: "sub", Sun: "ned" };
+
+// Token je predug i ima znakove nepogodne za id dokumenta, pa koristimo hash.
+// Isti uređaj uvijek pogađa isti dokument, pa kad se na uređaju prijavi drugi
+// korisnik, token se automatski prebaci na njega.
+function pushTokenRef(token) {
+  const id = crypto.createHash("sha256").update(token).digest("hex");
+  return db.collection(PUSH_TOKENS_COLLECTION).doc(id);
+}
+
+function readToken(request) {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "Moraš biti ulogovan.");
+  }
+
+  const { token } = request.data || {};
+  if (!token || typeof token !== "string" || token.length > 4096) {
+    throw new HttpsError("invalid-argument", "token je obavezan.");
+  }
+
+  return token;
+}
+
+exports.registerPushToken = onCall(async (request) => {
+  const token = readToken(request);
+  const uid = request.auth.uid;
+
+  const userSnap = await db.collection("users").doc(uid).get();
+  const user = userSnap.data();
+  if (!userSnap.exists || !user?.orgId || user?.isActive === false) {
+    throw new HttpsError("permission-denied", "Nalog nije aktivan.");
+  }
+
+  await pushTokenRef(token).set({
+    token,
+    uid,
+    orgId: user.orgId,
+    platform: request.data?.platform === "ios" ? "ios" : "android",
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true };
+});
+
+exports.unregisterPushToken = onCall(async (request) => {
+  const token = readToken(request);
+
+  const ref = pushTokenRef(token);
+  const snap = await ref.get();
+  if (snap.exists && snap.data()?.uid === request.auth.uid) {
+    await ref.delete();
+  }
+
+  return { ok: true };
+});
+
+// Tipovi tipa principala za server i sistem; sve ostalo je korisnik aplikacije.
+const NON_USER_AUTH_TYPES = new Set([
+  "service_account",
+  "api_key",
+  "system",
+  "unauthenticated",
+  "unknown",
+]);
+
+/**
+ * Obavještava zaposlene na terminu kad se termin doda, izmijeni ili obriše.
+ * Korisnik koji je napravio promjenu ne dobija notifikaciju. Ko je to,
+ * Firestore javlja kroz auth context, pa radi i za starije verzije
+ * aplikacije; lastModifiedBy / deletedBy su rezerva.
+ */
+exports.notifySlotChange = onDocumentWrittenWithAuthContext(
+  "organizations/{orgId}/slots/{slotId}",
+  async (event) => {
+    const { orgId, slotId } = event.params;
+    const before = event.data?.before?.exists ? event.data.before.data() : null;
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+    const authUid =
+      event.authId && !NON_USER_AUTH_TYPES.has(event.authType) ? event.authId : null;
+
+    const recipients = slotNotificationRecipients(before, after, authUid);
+    if (recipients.length === 0) return;
+
+    const slot = after || before;
+    const slotEnd = (slot.endDateTime || slot.startDateTime)?.toDate?.();
+    if (!slotEnd || slotEnd < new Date()) return; // termin je već prošao
+
+    const body = `${await describeSlot(orgId, slot)} · ${formatSlotTime(slot.startDateTime)}`;
+
+    try {
+      await sendSlotNotifications({ orgId, slotId, recipients, body });
+    } catch (e) {
+      console.error(`notifySlotChange failed for ${orgId}/${slotId}:`, e);
+    }
+  }
+);
+
+/** Vraća [{ uid, type }] gdje je type created | updated | deleted. */
+function slotNotificationRecipients(before, after, authUid) {
+  const beforeIds = new Set(before?.employeeIds || []);
+  const afterIds = new Set(after?.employeeIds || []);
+
+  let actor;
+  const recipients = [];
+
+  if (!before && after) {
+    actor = after.lastModifiedBy;
+    afterIds.forEach((uid) => recipients.push({ uid, type: "created" }));
+  } else if (before && !after) {
+    actor = before.deletedBy;
+    beforeIds.forEach((uid) => recipients.push({ uid, type: "deleted" }));
+  } else if (before && after && hasRelevantSlotChange(before, after)) {
+    actor = after.lastModifiedBy;
+    // Za zaposlenog koji je tek dodat na termin to je novi termin, a za
+    // onoga koji je uklonjen termin je otkazan.
+    afterIds.forEach((uid) =>
+      recipients.push({ uid, type: beforeIds.has(uid) ? "updated" : "created" })
+    );
+    beforeIds.forEach((uid) => {
+      if (!afterIds.has(uid)) recipients.push({ uid, type: "deleted" });
+    });
+  }
+
+  if (authUid) actor = authUid;
+
+  return recipients.filter((r) => r.uid && r.uid !== actor);
+}
+
+function hasRelevantSlotChange(before, after) {
+  const comparable = (value) => {
+    if (value?.toMillis) return value.toMillis();
+    if (Array.isArray(value)) return JSON.stringify([...value].sort());
+    return JSON.stringify(value ?? null);
+  };
+
+  return SLOT_NOTIFY_FIELDS.some(
+    (field) => comparable(before[field]) !== comparable(after[field])
+  );
+}
+
+async function describeSlot(orgId, slot) {
+  const orgRef = db.collection("organizations").doc(orgId);
+
+  if (slot.clientId) {
+    const clientSnap = await orgRef.collection("clients").doc(slot.clientId).get();
+    const clientName = clientSnap.data()?.name;
+    if (clientName) return clientName;
+  }
+
+  const serviceIds = slot.serviceIds || [];
+  if (serviceIds.length > 0) {
+    const serviceSnaps = await db.getAll(
+      ...serviceIds.map((id) => orgRef.collection("services").doc(id))
+    );
+    const titles = serviceSnaps.map((snap) => snap.data()?.title).filter(Boolean);
+    if (titles.length > 0) return titles.join(", ");
+  }
+
+  return "Termin";
+}
+
+/** npr. "pon 27.10. u 14:30" u lokalnom vremenu salona. */
+function formatSlotTime(timestamp) {
+  const date = timestamp?.toDate?.();
+  if (!date) return "";
+
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: SLOT_TIME_ZONE,
+      weekday: "short",
+      day: "numeric",
+      month: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value])
+  );
+
+  return `${WEEKDAYS[parts.weekday] || ""} ${parts.day}.${parts.month}. u ${parts.hour}:${parts.minute}`.trim();
+}
+
+async function sendSlotNotifications({ orgId, slotId, recipients, body }) {
+  const typeByUid = new Map(recipients.map((r) => [r.uid, r.type]));
+  const uids = [...typeByUid.keys()];
+
+  const tokenDocs = [];
+  for (let i = 0; i < uids.length; i += 30) {
+    const snap = await db
+      .collection(PUSH_TOKENS_COLLECTION)
+      .where("uid", "in", uids.slice(i, i + 30))
+      .get();
+    tokenDocs.push(...snap.docs.filter((doc) => doc.data().orgId === orgId));
+  }
+
+  console.log(
+    `notifySlotChange ${orgId}/${slotId}: primaoci ${JSON.stringify(recipients)}, tokena ${tokenDocs.length}`
+  );
+  if (tokenDocs.length === 0) return;
+
+  const messages = tokenDocs.map((doc) => {
+    const { token, uid } = doc.data();
+    const type = typeByUid.get(uid);
+
+    return {
+      token,
+      notification: { title: SLOT_NOTIFICATION_TITLES[type], body },
+      data: { type, slotId, orgId },
+      android: { priority: "high", notification: { sound: "default" } },
+      apns: { payload: { aps: { sound: "default" } } },
+    };
+  });
+
+  const response = await admin.messaging().sendEach(messages);
+  response.responses.forEach((result, index) => {
+    const uid = tokenDocs[index].data().uid;
+    if (result.success) {
+      console.log(`notifySlotChange: poslano ${uid} (${result.messageId})`);
+    } else {
+      console.error(`notifySlotChange: slanje za ${uid} nije uspjelo: ${result.error?.code} ${result.error?.message}`);
+    }
+  });
+
+  const invalidTokenRefs = response.responses
+    .map((result, index) =>
+      !result.success && INVALID_TOKEN_CODES.has(result.error?.code)
+        ? tokenDocs[index].ref
+        : null
+    )
+    .filter(Boolean);
+
+  await Promise.all(invalidTokenRefs.map((ref) => ref.delete()));
+}
+

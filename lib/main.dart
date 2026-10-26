@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:calendar_view/calendar_view.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 
 import 'common/constants/routes.dart';
 import 'common/di/di_container.dart';
+import 'common/services/push_notification_service.dart';
 import 'common/shared_prefs/shared_prefs_service.dart';
 import 'common/widgets/screens/splash_screen.dart';
 import 'common/widgets/screens/update_screen.dart';
@@ -42,6 +44,8 @@ Future<void> mainApp(FirebaseOptions options) async {
   await SharedPrefsService.instance.init();
 
   setupDependencies();
+
+  unawaited(getIt<PushNotificationService>().init());
 
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -83,6 +87,8 @@ class _MyAppState extends State<MyApp> {
       controller: _eventController,
       child: MaterialApp(
         title: 'Flutter Demo',
+        navigatorKey: navigatorKey,
+        scaffoldMessengerKey: scaffoldMessengerKey,
         theme: lightTheme,
         initialRoute: Routes.splash,
         debugShowCheckedModeBanner: false,
@@ -104,7 +110,9 @@ class _MyAppState extends State<MyApp> {
                 builder: (context) => const LoginScreen(),
               );
             case Routes.home:
+              // settings su potrebni da bi se popUntil mogao vratiti na home.
               return CupertinoPageRoute(
+                settings: settings,
                 builder: (context) => const HomeScreen(),
               );
             case Routes.settings:

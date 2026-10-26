@@ -5,6 +5,7 @@ import 'package:equatable/equatable.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 import '../../../../common/di/di_container.dart';
+import '../../../../common/services/push_notification_service.dart';
 import '../../../organization/data/repositories/organization_repository.dart';
 import '../../data/repositories/authentication_repository.dart';
 
@@ -16,6 +17,7 @@ class AuthenticationBloc
   AuthenticationBloc({
     required this.authenticationRepository,
     required this.organizationRepository,
+    required this.pushNotificationService,
   }) : super(const AuthenticationState()) {
     on<AuthenticationCheckRequested>(_onAuthenticationCheckRequested);
     on<AuthenticationLogoutRequested>(_onAuthenticationLogoutRequested);
@@ -23,6 +25,7 @@ class AuthenticationBloc
 
   final AuthenticationRepository authenticationRepository;
   final OrganizationRepository organizationRepository;
+  final PushNotificationService pushNotificationService;
 
   Future<void> _onAuthenticationCheckRequested(
     AuthenticationCheckRequested event,
@@ -77,6 +80,8 @@ class AuthenticationBloc
     AuthenticationLogoutRequested event,
     Emitter<AuthenticationState> emit,
   ) async {
+    // Token se briše dok je korisnik još prijavljen.
+    await pushNotificationService.onUserSignedOut();
     await authenticationRepository.logout();
     emit(state.copyWith(status: AuthenticationStatus.unauthenticated));
   }

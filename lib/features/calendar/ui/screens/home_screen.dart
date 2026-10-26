@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:calendar_view/calendar_view.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +9,7 @@ import '../../../../common/constants/routes.dart';
 import '../../../../common/cubits/calendar_type_view/calendar_type_view_cubit.dart';
 import '../../../../common/di/di_container.dart';
 import '../../../../common/extensions/context_extension.dart';
+import '../../../../common/services/push_notification_service.dart';
 import '../../../../common/widgets/custom_app_bar.dart';
 import '../../../../common/widgets/logo_widget.dart';
 import '../../../../common/widgets/primary_button.dart';
@@ -64,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     });
 
+    unawaited(getIt<PushNotificationService>().onUserSignedIn());
   }
 
   /// Mijenja samo termine koji su dodani, izmijenjeni ili obrisani, umjesto
