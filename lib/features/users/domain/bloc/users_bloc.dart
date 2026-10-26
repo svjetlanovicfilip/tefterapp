@@ -119,6 +119,15 @@ class UsersBloc extends Bloc<UsersEvent, UsersState> {
     );
 
     if (result.isFailure) {
+      // bez ovoga state ostaje UsersAdding i dugme se vrti zauvijek
+      final error = result.failure.toString();
+      emit(
+        UsersAddingFailure(
+          error.contains('already-exists')
+              ? 'Korisnik sa ovim emailom već postoji.'
+              : 'Dodavanje zaposlenog nije uspjelo. Pokušajte ponovo.',
+        ),
+      );
       return;
     }
 

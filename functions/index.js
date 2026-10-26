@@ -37,7 +37,7 @@ const IDENTITY_TOOLKIT_API_KEY = defineSecret("IDENTITY_TOOLKIT_API_KEY");
  *  - Caller role must be "ORG_OWNER"
  *  - Caller must have orgId
  */
-exports.createEmployee = onCall(async (request) => {
+exports.createEmployee = onCall({ secrets: [IDENTITY_TOOLKIT_API_KEY] }, async (request) => {
   // 1) auth check
   if (!request.auth?.uid) {
     throw new HttpsError("unauthenticated", "Moraš biti ulogovan.");
@@ -84,7 +84,15 @@ exports.createEmployee = onCall(async (request) => {
     });
   } catch (e) {
     if (e?.code === "auth/email-already-exists") {
-      throw new HttpsError("already-exists", "Korisnik sa ovim emailom već postoji.");
+      // Ako je ranije obrisan (soft delete) zaposleni iz iste organizacije -> reaktiviraj ga
+      return reactivateEmployee({
+        email: normalizedEmail,
+        name,
+        surname,
+        username,
+        orgId,
+        callerUid,
+      });
     }
     throw new HttpsError("internal", `Ne mogu kreirati Auth user-a: ${e.message}`);
   }
@@ -143,6 +151,105 @@ exports.createEmployee = onCall(async (request) => {
     user: userDoc
   };
 });
+
+
+/**
+ * Reaktivira prethodno obrisanog (isActive=false) zaposlenog iz iste organizacije.
+ * Ako korisnik pripada drugoj organizaciji ili je aktivan -> already-exists.
+ */
+async function reactivateEmployee({ email, name, surname, username, orgId, callerUid }) {
+  const alreadyExists = new HttpsError("already-exists", "Korisnik sa ovim emailom već postoji.");
+
+  let existingAuthUser;
+  try {
+    existingAuthUser = await admin.auth().getUserByEmail(email);
+  } catch (e) {
+    throw alreadyExists;
+  }
+
+  const employeeUid = existingAuthUser.uid;
+  const employeeRef = db.collection("users").doc(employeeUid);
+  const employeeSnap = await employeeRef.get();
+  const employee = employeeSnap.data();
+
+  if (!employeeSnap.exists || employee?.orgId !== orgId || employee?.isActive !== false) {
+    throw alreadyExists;
+  }
+
+  try {
+    await admin.auth().updateUser(employeeUid, {
+      displayName: `${name || ""} ${surname || ""}`.trim(),
+      disabled: false,
+    });
+    await admin.auth().setCustomUserClaims(employeeUid, {
+      role: "ORG_EMPLOYEE",
+      orgId: orgId,
+    });
+  } catch (e) {
+    throw new HttpsError("internal", `Ne mogu reaktivirati Auth user-a: ${e.message}`);
+  }
+
+  const userDoc = {
+    email: email,
+    isActive: true,
+    name: name || "",
+    surname: surname || "",
+    username: username || "",
+    orgId: orgId,
+    role: "ORG_EMPLOYEE",
+    reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    reactivatedBy: callerUid,
+  };
+
+  try {
+    await employeeRef.set(
+      {
+        ...userDoc,
+        deletedAt: admin.firestore.FieldValue.delete(),
+        deletedBy: admin.firestore.FieldValue.delete(),
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    // vrati Auth u disabled stanje da ostane konzistentno sa Firestore-om
+    await admin.auth().updateUser(employeeUid, { disabled: true });
+    throw new HttpsError("internal", `Ne mogu upisati user-a u Firestore: ${e.message}`);
+  }
+
+  // onCreate trigger se ne okida za postojećeg usera, pa reset email šaljemo ovdje
+  await sendPasswordResetEmail(email, IDENTITY_TOOLKIT_API_KEY.value());
+
+  return {
+    ok: true,
+    uid: employeeUid,
+    orgId: orgId,
+    user: userDoc,
+  };
+}
+
+async function sendPasswordResetEmail(email, apiKey) {
+  try {
+    const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestType: "PASSWORD_RESET",
+        email,
+      }),
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error(`sendOobCode failed: ${resp.status} ${txt}`);
+    } else {
+      console.log(`Reset password email sent to: ${email}`);
+    }
+  } catch (e) {
+    console.error("Reset password email error:", e);
+  }
+}
 
 
 //Soft Delte Emplyee func
@@ -266,25 +373,7 @@ exports.sendResetPasswordOnAuthCreate = functions
       if (!user?.email) return null;
 
       const email = user.email.trim().toLowerCase();
-      const apiKey = IDENTITY_TOOLKIT_API_KEY.value();
-
-      const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
-
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requestType: "PASSWORD_RESET",
-          email,
-        }),
-      });
-
-      if (!resp.ok) {
-        const txt = await resp.text();
-        console.error(`sendOobCode failed: ${resp.status} ${txt}`);
-      } else {
-        console.log(`Reset password email sent to: ${email}`);
-      }
+      await sendPasswordResetEmail(email, IDENTITY_TOOLKIT_API_KEY.value());
 
       return null;
     } catch (e) {
@@ -292,6 +381,7 @@ exports.sendResetPasswordOnAuthCreate = functions
       return null;
     }
   });
+
 
 // ---------------------------------------------------------------------------
 // Push notifikacije za termine

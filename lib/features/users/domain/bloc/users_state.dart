@@ -13,6 +13,14 @@ class UsersFetching extends UsersState {}
 
 class UsersAdding extends UsersState {}
 
+class UsersAddingFailure extends UsersState {
+  const UsersAddingFailure(this.message);
+  final String message;
+
+  @override
+  List<Object> get props => [message];
+}
+
 class UsersFetchingSuccess extends UsersState {
   const UsersFetchingSuccess(this.users, {this.shouldRefreshUsersList = true});
   final List<UserModel> users;
