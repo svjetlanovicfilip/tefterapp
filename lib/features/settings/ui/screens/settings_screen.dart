@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:app_settings/app_settings.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../common/constants/routes.dart';
@@ -307,7 +308,8 @@ class _NotificationsSettingsItemState extends State<_NotificationsSettingsItem>
                     ),
                   ),
                 ),
-                Switch.adaptive(
+                // Isti iOS izgled i na Androidu.
+                CupertinoSwitch(
                   value: _isEnabled && !_isBlockedBySystem,
                   activeTrackColor: AppColors.amber500,
                   onChanged: _isLoading ? null : _onChanged,
