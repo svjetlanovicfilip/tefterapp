@@ -11,6 +11,10 @@ abstract class CalendarRepository {
   Future<Result<Slot?, Exception>> getSlotById(String slotId);
   Future<Result<String, Exception>> createSlot(Slot slot);
   Future<Result<bool, Exception>> updateSlot(Slot slot);
+  Future<Result<bool, Exception>> updateSlotNote({
+    required String slotId,
+    required String note,
+  });
   Future<Result<bool, Exception>> deleteSlot(String slotId);
   Future<Result<bool, Exception>> isSlotOverlapping({
     required DateTime newStart,

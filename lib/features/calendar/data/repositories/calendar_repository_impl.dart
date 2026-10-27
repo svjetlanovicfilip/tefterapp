@@ -47,6 +47,14 @@ class CalendarRepositoryImpl implements CalendarRepository {
   }
 
   @override
+  Future<Result<bool, Exception>> updateSlotNote({
+    required String slotId,
+    required String note,
+  }) {
+    return calendarRemoteDatasource.updateSlotNote(slotId: slotId, note: note);
+  }
+
+  @override
   Future<Result<bool, Exception>> deleteSlot(String slotId) async {
     final result = await calendarRemoteDatasource.deleteSlot(slotId);
     if (result.isFailure) {

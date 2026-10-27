@@ -6,6 +6,7 @@ import 'package:equatable/equatable.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 import '../../../../common/di/di_container.dart';
+import '../../../../common/models/result.dart';
 import '../../data/models/slot.dart';
 import '../../data/repositories/calendar_repository.dart';
 
@@ -27,10 +28,16 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
     on<_ClockTicked>(_onClockTicked);
     on<AddNewSlot>(_onAddNewSlot);
     on<UpdateSlot>(_onUpdateSlot);
+    on<UpdateSlotNote>(_onUpdateSlotNote);
     on<DeleteSlot>(_onDeleteSlot);
   }
 
   final CalendarRepository calendarRepository;
+
+  /// Bez interneta Firestore drži upis u redu i šalje ga kad se veza vrati,
+  /// a Future se ne završava do tada. Nakon ovog vremena upis smatramo
+  /// sačuvanim, da ekran ne čeka beskonačno.
+  static const _writeTimeout = Duration(seconds: 10);
 
   final _weekListeners =
       <DateTime, StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>{};
@@ -283,11 +290,15 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
       return;
     }
 
-    final result = await calendarRepository.createSlot(e.slot);
+    final result = await calendarRepository
+        .createSlot(e.slot)
+        .timeout(_writeTimeout, onTimeout: () => Result.success(''));
     if (result.isFailure) {
       emit(ErrorLoadingSlots(errorMessage: result.failure?.toString() ?? ''));
       return;
     }
+
+    emit(SlotSaved(version: ++_version));
   }
 
   Future<void> _onUpdateSlot(UpdateSlot e, Emitter<SlotState> emit) async {
@@ -299,11 +310,38 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
       return;
     }
 
-    final result = await calendarRepository.updateSlot(e.slot);
+    final result = await calendarRepository
+        .updateSlot(e.slot)
+        .timeout(_writeTimeout, onTimeout: () => Result.success(true));
     if (result.isFailure) {
       emit(ErrorLoadingSlots(errorMessage: result.failure?.toString() ?? ''));
       return;
     }
+
+    emit(SlotSaved(version: ++_version));
+  }
+
+  /// Samo napomena: bez provjere preklapanja, pa radi i na prošlim terminima
+  /// i kad se termin već preklapa s nekim drugim.
+  Future<void> _onUpdateSlotNote(
+    UpdateSlotNote e,
+    Emitter<SlotState> emit,
+  ) async {
+    emit(const SlotStateInitial());
+
+    final result = await calendarRepository
+        .updateSlotNote(slotId: e.slotId, note: e.note)
+        .timeout(_writeTimeout, onTimeout: () => Result.success(true));
+    if (result.isFailure) {
+      emit(
+        const ErrorLoadingSlots(
+          errorMessage: 'Napomena nije sačuvana. Pokušajte ponovo.',
+        ),
+      );
+      return;
+    }
+
+    emit(SlotSaved(version: ++_version));
   }
 
   Future<void> _onDeleteSlot(DeleteSlot e, Emitter<SlotState> emit) async {

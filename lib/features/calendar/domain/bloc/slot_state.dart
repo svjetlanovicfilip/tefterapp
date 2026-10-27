@@ -40,6 +40,16 @@ class SlotsLoaded extends SlotState {
   List<Object?> get props => [version];
 }
 
+/// Termin je sačuvan (ili čeka slanje dok nema interneta).
+class SlotSaved extends SlotState {
+  const SlotSaved({required this.version});
+
+  final int version;
+
+  @override
+  List<Object?> get props => [version];
+}
+
 class ErrorLoadingSlots extends SlotState {
   const ErrorLoadingSlots({required this.errorMessage});
 

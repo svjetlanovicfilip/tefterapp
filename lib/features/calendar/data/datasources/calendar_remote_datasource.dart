@@ -99,6 +99,27 @@ class CalendarRemoteDatasource {
     }
   }
 
+  /// Mijenja samo napomenu termina (title), npr. na terminu koji je prošao.
+  Future<Result<bool, Exception>> updateSlotNote({
+    required String slotId,
+    required String note,
+  }) async {
+    try {
+      await _slots.doc(slotId).update({
+        'title': note,
+        'lastModifiedBy': appState.currentUser?.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      return Result.success(true);
+    } on Exception catch (e) {
+      unawaited(
+        FirebaseCrashlytics.instance.recordError(e, StackTrace.current),
+      );
+      return Result.failure(Exception(e));
+    }
+  }
+
   Future<Result<bool, Exception>> deleteSlot(String slotId) async {
     try {
       final slotRef = _slots.doc(slotId);

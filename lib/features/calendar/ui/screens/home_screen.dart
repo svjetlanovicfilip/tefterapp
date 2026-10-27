@@ -113,6 +113,8 @@ class _HomeScreenState extends State<HomeScreen> {
               previous is SlotStateLoading || current is SlotStateLoading,
       listener: (context, state) {
         if (state is ErrorLoadingSlots) {
+          // Greške iz otvorenog ekrana termina prikazuje taj ekran.
+          if (ModalRoute.of(context)?.isCurrent == false) return;
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(SnackBar(content: Text(state.errorMessage)));
