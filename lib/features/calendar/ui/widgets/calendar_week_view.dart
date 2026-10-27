@@ -84,6 +84,7 @@ class CalendarWeekView extends StatelessWidget {
                 .join(', ') ??
             '';
         final color = events.first.event?.color;
+        final hasNote = (events.first.event?.title ?? '').isNotEmpty;
         var titleStyle = const TextStyle(color: AppColors.white, fontSize: 12);
 
         final titleHeight = textSize(title, titleStyle).height;
@@ -122,12 +123,25 @@ class CalendarWeekView extends StatelessWidget {
           child:
               isEventLessThan15Minutes
                   ? const SizedBox.shrink()
-                  : Text(
-                    title,
-                    style: titleStyle,
-                    maxLines: lines,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: true,
+                  : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: titleStyle,
+                          maxLines: lines,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: true,
+                        ),
+                      ),
+                      if (hasNote)
+                        Icon(
+                          Icons.sticky_note_2_outlined,
+                          color: AppColors.white,
+                          size: titleStyle.fontSize,
+                        ),
+                    ],
                   ),
         );
       },
