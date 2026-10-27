@@ -636,7 +636,11 @@ async function sendSlotNotifications({ orgId, slotId, recipients, actorName, slo
         body: slotNotificationBody(type, actorName, slotTime),
       },
       data: { type, slotId, orgId },
-      android: { priority: "high", notification: { sound: "default" } },
+      android: {
+        priority: "high",
+        // Isti kanal pravi aplikacija; dok ga nema, Android koristi podrazumijevani.
+        notification: { sound: "default", channelId: "termini" },
+      },
       apns: { payload: { aps: { sound: "default" } } },
     };
   });
