@@ -9,7 +9,8 @@ class SharedPrefsService {
 
   static const String _employeesKey = 'employees_list';
   static const String _clientsFullSyncKey = 'clients_full_sync_at_';
-  static const String _pushNotificationsEnabledKey = 'push_notifications_enabled_';
+  static const String _pushNotificationsEnabledKey =
+      'push_notifications_enabled_';
 
   SharedPreferences? _prefs;
 
@@ -18,61 +19,80 @@ class SharedPrefsService {
     _prefs ??= await SharedPreferences.getInstance();
   }
 
- Future<SharedPreferences> _getPrefs() async {
+  Future<SharedPreferences> _getPrefs() async {
     return _prefs ??= await SharedPreferences.getInstance();
   }
 
+  // Lista je po organizaciji, da se pri prijavi u drugu organizaciju ne
+  // prikažu zaposleni iz prethodne.
+  String _employeesKeyFor(String organizationId) =>
+      '${_employeesKey}_$organizationId';
+
   /// Setuje listu objekata
-Future<bool> setUsers(List<UserModel> users) async {
-  final prefs = _prefs ?? await SharedPreferences.getInstance();
-
-  // List<UserModel> -> List<String>
-  final encoded = users.map((e) => jsonEncode(e.toJson())).toList();
-
-  return prefs.setStringList(_employeesKey, encoded);
-}
-
- /// Dodaj JEDAN objekat (append)
-  Future<bool> addUser(UserModel newUser) async {
+  Future<bool> setUsers(String organizationId, List<UserModel> users) async {
     final prefs = await _getPrefs();
 
-    // 1) Uzmi postojeću listu stringova
-    final raw = prefs.getStringList(_employeesKey) ?? <String>[]
+    // List<UserModel> -> List<String>
+    final encoded = users.map((e) => jsonEncode(e.toJson())).toList();
 
-    // 2) Dodaj novi objekat kao JSON string
-    ..add(jsonEncode(newUser.toJson()));
-
-    // 3) Snimi nazad
-    return prefs.setStringList(_employeesKey, raw);
+    return prefs.setStringList(_employeesKeyFor(organizationId), encoded);
   }
 
-  Future<List<UserModel>> getUsers() async {
-  final prefs = _prefs ?? await SharedPreferences.getInstance();
+  /// Dodaj JEDAN objekat (append)
+  Future<bool> addUser(String organizationId, UserModel newUser) async {
+    final prefs = await _getPrefs();
+    final raw = await _getRawUsers(organizationId)
+      ..add(jsonEncode(newUser.toJson()));
 
-  final raw = prefs.getStringList(_employeesKey) ?? [];
+    return prefs.setStringList(_employeesKeyFor(organizationId), raw);
+  }
 
-  return raw.map((item) {
-    final map = jsonDecode(item) as Map<String, dynamic>;
-    final id = (map['id'] ?? '') as String; // ako čuvaš id u json-u
-    return UserModel.fromJson(map, id);
-  }).toList();
-}
+  Future<List<UserModel>> getUsers(String organizationId) async {
+    final raw = await _getRawUsers(organizationId);
 
-/// Obriši jednog usera iz liste po userId
-Future<bool> removeUserById(String userId) async {
-  final prefs = await _getPrefs();
+    return raw.map((item) {
+      final map = jsonDecode(item) as Map<String, dynamic>;
+      final id = (map['id'] ?? '') as String; // ako čuvaš id u json-u
+      return UserModel.fromJson(map, id);
+    }).toList();
+  }
 
-  final raw = prefs.getStringList(_employeesKey) ?? <String>[];
+  /// Obriši jednog usera iz liste po userId
+  Future<bool> removeUserById(String organizationId, String userId) async {
+    final prefs = await _getPrefs();
 
-  // Filtriramo sve osim usera sa zadatim ID-em
-  final updated = raw.where((item) {
-    final map = jsonDecode(item) as Map<String, dynamic>;
-    final id = (map['id'] ?? '') as String;
-    return id != userId;
-  }).toList();
+    final raw = await _getRawUsers(organizationId);
 
-  return prefs.setStringList(_employeesKey, updated);
-}
+    // Filtriramo sve osim usera sa zadatim ID-em
+    final updated =
+        raw.where((item) {
+          final map = jsonDecode(item) as Map<String, dynamic>;
+          final id = (map['id'] ?? '') as String;
+          return id != userId;
+        }).toList();
+
+    return prefs.setStringList(_employeesKeyFor(organizationId), updated);
+  }
+
+  Future<List<String>> _getRawUsers(String organizationId) async {
+    final prefs = await _getPrefs();
+    final raw = prefs.getStringList(_employeesKeyFor(organizationId));
+    if (raw != null) return List.of(raw);
+
+    // Starije verzije su čuvale jednu listu za sve. Preuzima se samo ako je
+    // iz iste organizacije, da se ne izgubi redoslijed zaposlenih.
+    final legacy = prefs.getStringList(_employeesKey);
+    if (legacy == null) return [];
+    await prefs.remove(_employeesKey);
+
+    final migrated =
+        legacy.where((item) {
+          final map = jsonDecode(item) as Map<String, dynamic>;
+          return map['orgId'] == organizationId;
+        }).toList();
+    await prefs.setStringList(_employeesKeyFor(organizationId), migrated);
+    return migrated;
+  }
 
   /// Kada su klijenti organizacije posljednji put kompletno sinhronizovani.
   Future<DateTime?> getClientsFullSyncAt(String organizationId) async {
@@ -81,7 +101,10 @@ Future<bool> removeUserById(String userId) async {
     return millis == null ? null : DateTime.fromMillisecondsSinceEpoch(millis);
   }
 
-  Future<bool> setClientsFullSyncAt(String organizationId, DateTime time) async {
+  Future<bool> setClientsFullSyncAt(
+    String organizationId,
+    DateTime time,
+  ) async {
     final prefs = await _getPrefs();
     return prefs.setInt(
       '$_clientsFullSyncKey$organizationId',
@@ -101,11 +124,5 @@ Future<bool> removeUserById(String userId) async {
   }) async {
     final prefs = await _getPrefs();
     return prefs.setBool('$_pushNotificationsEnabledKey$userId', enabled);
-  }
-
-  /// Opcionalno: obriši listu
-  Future<bool> clearUsers() async {
-    final prefs = _prefs ?? await SharedPreferences.getInstance();
-    return prefs.remove(_employeesKey);
   }
 }
