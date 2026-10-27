@@ -83,7 +83,6 @@ class CalendarWeekView extends StatelessWidget {
                 .map((service) => service?.title)
                 .join(', ') ??
             '';
-        final color = events.first.event?.color;
         final hasNote = (events.first.event?.title ?? '').isNotEmpty;
         var titleStyle = const TextStyle(color: AppColors.white, fontSize: 12);
 
@@ -115,7 +114,7 @@ class CalendarWeekView extends StatelessWidget {
 
         return Container(
           decoration: BoxDecoration(
-            color: Color(int.parse(color!)),
+            color: events.first.event?.displayColor ?? AppColors.amber500,
             borderRadius: BorderRadius.circular(4),
           ),
           margin: const EdgeInsets.symmetric(vertical: padding),

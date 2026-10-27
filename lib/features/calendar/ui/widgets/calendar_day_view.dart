@@ -92,7 +92,6 @@ class CalendarDayView extends StatelessWidget {
             client?.name ?? events.first.event?.clientName ?? services ?? '';
         final timeRange = formatDateRange(startDuration, endDuration);
         final note = events.first.event?.title;
-        final color = events.first.event?.color;
 
         var titleStyle = const TextStyle(
           color: Colors.white,
@@ -155,7 +154,7 @@ class CalendarDayView extends StatelessWidget {
 
         return Container(
           decoration: BoxDecoration(
-            color: Color(int.parse(color!)),
+            color: events.first.event?.displayColor ?? AppColors.amber500,
             borderRadius: BorderRadius.circular(8),
           ),
           margin: const EdgeInsets.symmetric(
