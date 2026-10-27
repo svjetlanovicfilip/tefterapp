@@ -184,6 +184,7 @@ class _AddEditClientScreenState extends State<AddEditClientScreen> {
             name: name,
             phoneNumber: phoneNumber,
             description: description,
+            createdAt: widget.args.client?.createdAt,
             isActive: true,
           ),
         ),
