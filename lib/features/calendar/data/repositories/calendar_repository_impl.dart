@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../../common/models/result.dart';
 import '../datasources/calendar_remote_datasource.dart';
 import '../models/slot.dart';
+import '../models/slot_save_outcome.dart';
 import 'calendar_repository.dart';
 
 class CalendarRepositoryImpl implements CalendarRepository {
@@ -24,6 +25,17 @@ class CalendarRepositoryImpl implements CalendarRepository {
   @override
   Future<Result<Slot?, Exception>> getSlotById(String slotId) {
     return calendarRemoteDatasource.getSlotById(slotId);
+  }
+
+  @override
+  String newSlotId() => calendarRemoteDatasource.newSlotId();
+
+  @override
+  Future<Result<SlotSaveOutcome, Exception>> saveSlotAtomically(
+    Slot slot, {
+    required bool isNew,
+  }) {
+    return calendarRemoteDatasource.saveSlotAtomically(slot, isNew: isNew);
   }
 
   @override

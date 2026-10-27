@@ -80,7 +80,10 @@ void setupDependencies() {
       ),
     )
     ..registerSingleton<CalendarRemoteDatasource>(
-      CalendarRemoteDatasource(firebaseFirestore: firebaseFirestore),
+      CalendarRemoteDatasource(
+        firebaseFirestore: firebaseFirestore,
+        functions: FirebaseFunctions.instanceFor(region: 'europe-west1'),
+      ),
     )
     ..registerSingleton<UserRemoteDatasource>(
       UserRemoteDatasource(functions: firebaseFunc, firebaseAuth: firebaseAuth),

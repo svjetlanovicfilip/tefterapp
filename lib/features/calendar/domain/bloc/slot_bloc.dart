@@ -8,6 +8,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import '../../../../common/di/di_container.dart';
 import '../../../../common/models/result.dart';
 import '../../data/models/slot.dart';
+import '../../data/models/slot_save_outcome.dart';
 import '../../data/repositories/calendar_repository.dart';
 
 part 'slot_event.dart';
@@ -38,6 +39,10 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
   /// a Future se ne završava do tada. Nakon ovog vremena upis smatramo
   /// sačuvanim, da ekran ne čeka beskonačno.
   static const _writeTimeout = Duration(seconds: 10);
+
+  static const _overlapMessage =
+      'Termin se preklapa s drugim terminom. Molimo Vas izaberite drugi termin.';
+  static const _saveFailedMessage = 'Termin nije sačuvan. Pokušajte ponovo.';
 
   final _weekListeners =
       <DateTime, StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>{};
@@ -274,7 +279,7 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
       }
 
       if (isOverlapping) {
-        return 'Termin se preklapa s drugim terminom. Molimo Vas izaberite drugi termin.';
+        return _overlapMessage;
       }
     }
 
@@ -282,40 +287,67 @@ class SlotBloc extends Bloc<SlotEvent, SlotState> {
   }
 
   Future<void> _onAddNewSlot(AddNewSlot e, Emitter<SlotState> emit) async {
-    emit(const SlotStateInitial());
-
-    final errorMessage = await _validateSlot(e.slot);
-    if (errorMessage != null) {
-      emit(ErrorLoadingSlots(errorMessage: errorMessage));
-      return;
-    }
-
-    final result = await calendarRepository
-        .createSlot(e.slot)
-        .timeout(_writeTimeout, onTimeout: () => Result.success(''));
-    if (result.isFailure) {
-      emit(ErrorLoadingSlots(errorMessage: result.failure?.toString() ?? ''));
-      return;
-    }
-
-    emit(SlotSaved(version: ++_version));
+    final slot =
+        e.slot.id == null
+            ? e.slot.copyWith(id: calendarRepository.newSlotId())
+            : e.slot;
+    await _saveSlot(slot, isNew: true, emit: emit);
   }
 
-  Future<void> _onUpdateSlot(UpdateSlot e, Emitter<SlotState> emit) async {
+  Future<void> _onUpdateSlot(UpdateSlot e, Emitter<SlotState> emit) =>
+      _saveSlot(e.slot, isNew: false, emit: emit);
+
+  /// Lokalna provjera daje brz odgovor, a konačnu provjeru i upis radi
+  /// Cloud Function u jednoj transakciji, pa dva uređaja ne mogu u isto
+  /// vrijeme zakazati isti termin. Bez interneta termin se upisuje direktno,
+  /// samo uz lokalnu provjeru.
+  Future<void> _saveSlot(
+    Slot slot, {
+    required bool isNew,
+    required Emitter<SlotState> emit,
+  }) async {
     emit(const SlotStateInitial());
 
-    final errorMessage = await _validateSlot(e.slot);
+    final errorMessage = await _validateSlot(slot);
     if (errorMessage != null) {
       emit(ErrorLoadingSlots(errorMessage: errorMessage));
       return;
     }
 
-    final result = await calendarRepository
-        .updateSlot(e.slot)
-        .timeout(_writeTimeout, onTimeout: () => Result.success(true));
-    if (result.isFailure) {
-      emit(ErrorLoadingSlots(errorMessage: result.failure?.toString() ?? ''));
+    final atomicResult = await calendarRepository.saveSlotAtomically(
+      slot,
+      isNew: isNew,
+    );
+    if (atomicResult.isFailure) {
+      emit(const ErrorLoadingSlots(errorMessage: _saveFailedMessage));
       return;
+    }
+
+    switch (atomicResult.success!) {
+      case SlotSaveOutcome.saved:
+        break;
+      case SlotSaveOutcome.overlapping:
+        emit(const ErrorLoadingSlots(errorMessage: _overlapMessage));
+        return;
+      case SlotSaveOutcome.slotMissing:
+        emit(const ErrorLoadingSlots(errorMessage: 'Termin više ne postoji.'));
+        return;
+      case SlotSaveOutcome.serverUnavailable:
+        final result =
+            isNew
+                ? await calendarRepository
+                    .createSlot(slot)
+                    .timeout(_writeTimeout, onTimeout: () => Result.success(''))
+                : await calendarRepository
+                    .updateSlot(slot)
+                    .timeout(
+                      _writeTimeout,
+                      onTimeout: () => Result.success(true),
+                    );
+        if (result.isFailure) {
+          emit(const ErrorLoadingSlots(errorMessage: _saveFailedMessage));
+          return;
+        }
     }
 
     emit(SlotSaved(version: ++_version));
