@@ -1,6 +1,7 @@
 import 'dart:math' show min;
 
 import 'package:bloc/bloc.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:collection/collection.dart';
 import 'package:equatable/equatable.dart';
 
@@ -47,9 +48,13 @@ class EmployeeReportBloc
   List<UserModel> get _users => getIt<UsersBloc>().users;
   List<Client> get _clients => getIt<ClientsBloc>().clients;
 
+  // Usluga koja je u međuvremenu obrisana se preskače.
   List<ServiceType> _getServicesFromSlot(List<String> serviceIds) =>
       serviceIds
-          .map((id) => _services.firstWhere((service) => service.id == id))
+          .map(
+            (id) => _services.firstWhereOrNull((service) => service.id == id),
+          )
+          .nonNulls
           .toList();
 
   Future<void> _onEmployeeReportFetchRequested(
@@ -66,16 +71,36 @@ class EmployeeReportBloc
     }
 
     emit(EmployeeReportFetching());
-    final result = await employeeReportRepository.getEmployeeMonthlyReport(
-      employeeId: _selectedEmployeeId,
-      from: DateTime(int.parse(_selectedYear), _selectedMonth + 1),
-      to: DateTime(int.parse(_selectedYear), _selectedMonth + 2, 0),
-    );
 
+    final from = DateTime(int.parse(_selectedYear), _selectedMonth + 1);
+    // Prvi dan sljedećeg mjeseca u 00:00, ne uključuje se.
+    final to = DateTime(int.parse(_selectedYear), _selectedMonth + 2);
+
+    final QuerySnapshot<Map<String, dynamic>> result;
+    try {
+      result = await employeeReportRepository.getEmployeeMonthlyReport(
+        employeeId: _selectedEmployeeId,
+        from: from,
+        to: to,
+      );
+    } on Exception catch (_) {
+      emit(
+        const EmployeeReportFailure(
+          message: 'Izvještaj nije učitan. Pokušajte ponovo.',
+        ),
+      );
+      return;
+    }
+
+    // Upit vraća i termine koji počinju prije mjeseca a završavaju u njemu;
+    // takav termin pripada prethodnom mjesecu.
     final slots =
-        result.docs.map((doc) => Slot.fromJson(doc.data(), doc.id)).toList();
+        result.docs
+            .map((doc) => Slot.fromJson(doc.data(), doc.id))
+            .where((slot) => !slot.startDateTime.isBefore(from))
+            .toList();
 
-    final employee = _users.firstWhere(
+    final employee = _users.firstWhereOrNull(
       (user) => user.id == _selectedEmployeeId,
     );
 
@@ -92,9 +117,10 @@ class EmployeeReportBloc
     for (final slot in slots) {
       final services = _getServicesFromSlot(slot.serviceIds);
 
-      final totalServicePrice = services
-          .map((service) => service.price)
-          .reduce((a, b) => a + b);
+      final totalServicePrice = services.fold<double>(
+        0,
+        (total, service) => total + service.price,
+      );
 
       //earnings are divided by the number of employees
       final earnings = totalServicePrice / slot.employeeIds.length;
@@ -120,8 +146,8 @@ class EmployeeReportBloc
 
     final report = EmployeeReport(
       employeeId: _selectedEmployeeId,
-      employeeName: employee.name ?? '',
-      employeeEmail: employee.email,
+      employeeName: employee?.name ?? '',
+      employeeEmail: employee?.email ?? '',
       totalEarnings: totalEarnings,
       totalSlots: totalSlots,
       totalClients: totalClients,

@@ -38,6 +38,7 @@ class _EmployeeReportScreenState extends State<EmployeeReportScreen> {
                   (previous, current) =>
                       current is EmployeeReportFetched ||
                       current is EmployeeReportFetching ||
+                      current is EmployeeReportFailure ||
                       current is EmployeeSelected ||
                       current is EmployeeReportInitial,
               bloc: getIt<EmployeeReportBloc>(),
@@ -45,6 +46,31 @@ class _EmployeeReportScreenState extends State<EmployeeReportScreen> {
                 if (state is EmployeeReportFetched) {
                   return SliverToBoxAdapter(
                     child: EmployeeReportBody(report: state.report),
+                  );
+                } else if (state is EmployeeReportFailure) {
+                  return SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        spacing: 16,
+                        children: [
+                          Text(
+                            state.message,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          PrimaryButton(
+                            onTap:
+                                () => employeeReportBloc.add(
+                                  EmployeeReportFetchRequested(),
+                                ),
+                            title: 'Pokušaj ponovo',
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ],
+                      ),
+                    ),
                   );
                 } else if (state is EmployeeReportFetching) {
                   return const SliverFillRemaining(
