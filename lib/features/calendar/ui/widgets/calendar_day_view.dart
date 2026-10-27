@@ -75,10 +75,7 @@ class CalendarDayView extends StatelessWidget {
       },
 
       eventTileBuilder: (date, events, boundary, startDuration, endDuration) {
-        var isEventLessThan15Minutes = false;
-        var canFitHeightForTime = false;
         var canFitHeightForNote = false;
-
         final clientId = events.first.event?.clientId;
         final client = _clients.firstWhereOrNull(
           (client) => client.id == clientId,
@@ -116,38 +113,44 @@ class CalendarDayView extends StatelessWidget {
         const double horizontalPadding = 8;
         const double verticalPadding = 4;
         const double verticalSpacing = 4;
+        const double tileVerticalMargin = 2;
+        const double tileRightMargin = 6;
 
-        final duration = endDuration.difference(startDuration).inMinutes;
+        // Mjeri se stilom kakav se zaista prikazuje (sa visinom linije iz
+        // teme) i sa veličinom fonta iz podešavanja telefona.
+        final baseStyle = DefaultTextStyle.of(context).style;
+        final textScaler = MediaQuery.textScalerOf(context);
+        final contentWidth =
+            boundary.width - tileRightMargin - horizontalPadding * 2;
+        double measure(String text, TextStyle style, {int maxLines = 1}) =>
+            textSize(
+              text,
+              baseStyle.merge(style),
+              maxLines: maxLines,
+              maxWidth: contentWidth,
+              textScaler: textScaler,
+            ).height;
 
-        final noteHeight = textSize(note ?? '', noteStyle).height;
+        // Visina unutar paddinga i margina pločice.
+        final contentHeight =
+            boundary.height - tileVerticalMargin * 2 - verticalPadding * 2;
 
-        // Available sizes inside the tile (content box)
-        final eventHeight = boundary.shortestSide - verticalPadding;
+        var titleHeight = measure(title, titleStyle);
+        if (titleHeight > contentHeight) {
+          titleStyle = titleStyle.copyWith(fontSize: 12);
+          titleHeight = measure(title, titleStyle);
+        }
+        final canFitHeightForTitle = titleHeight <= contentHeight;
 
-        final titleHeight = textSize(title, titleStyle).height;
+        final timeHeight = measure(timeRange, timeStyle);
+        final heightWithTime = titleHeight + verticalSpacing + timeHeight;
+        final canFitHeightForTime =
+            canFitHeightForTitle && heightWithTime <= contentHeight;
 
-        if (duration <= 20 && duration >= 15) {
-          final contentHeight = eventHeight - titleHeight;
-          if (contentHeight > 5) {
-            titleStyle = titleStyle.copyWith(fontSize: 12);
-          }
-        } else if (duration < 15) {
-          isEventLessThan15Minutes = true;
-        } else {
-          final timeHeight = textSize(timeRange, timeStyle).height;
-
-          // Check vertical fit for time: it must fit under title (with spacing)
-          canFitHeightForTime = eventHeight > (titleHeight + timeHeight + 10);
-
-          if (note != null && note.isNotEmpty && duration >= 60) {
-            canFitHeightForNote =
-                eventHeight >
-                (titleHeight +
-                    verticalSpacing * 2 +
-                    timeHeight +
-                    noteHeight +
-                    10);
-          }
+        if (canFitHeightForTime && note != null && note.isNotEmpty) {
+          final noteHeight = measure(note, noteStyle, maxLines: 2);
+          canFitHeightForNote =
+              heightWithTime + verticalSpacing + noteHeight <= contentHeight;
         }
 
         return Container(
@@ -155,7 +158,9 @@ class CalendarDayView extends StatelessWidget {
             color: Color(int.parse(color!)),
             borderRadius: BorderRadius.circular(8),
           ),
-          margin: const EdgeInsets.symmetric(vertical: 2).copyWith(right: 6),
+          margin: const EdgeInsets.symmetric(
+            vertical: tileVerticalMargin,
+          ).copyWith(right: tileRightMargin),
           padding: const EdgeInsets.symmetric(
             horizontal: horizontalPadding,
             vertical: verticalPadding,
@@ -163,13 +168,27 @@ class CalendarDayView extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!isEventLessThan15Minutes) ...[
-                Text(
-                  title,
-                  style: titleStyle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: true,
+              if (canFitHeightForTitle) ...[
+                Row(
+                  spacing: 4,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: titleStyle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: true,
+                      ),
+                    ),
+                    // Napomena postoji, ali ne stane u pločicu.
+                    if (note != null && note.isNotEmpty && !canFitHeightForNote)
+                      const Icon(
+                        Icons.sticky_note_2_outlined,
+                        color: Colors.white,
+                        size: 14,
+                      ),
+                  ],
                 ),
                 if (canFitHeightForTime) ...[
                   const SizedBox(height: verticalSpacing),
