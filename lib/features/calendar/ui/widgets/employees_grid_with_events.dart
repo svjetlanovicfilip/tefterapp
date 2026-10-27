@@ -178,6 +178,7 @@ class EmployeesGridWithEvents extends StatelessWidget {
           final top = rawTop + inset;
           final double heightRaw = rawHeight - (inset * 2);
           final double height = heightRaw < 4 ? 4 : heightRaw;
+          final hasNote = (s.title ?? '').isNotEmpty;
           var title = s.title ?? '';
           final fontSize =
               (durationMinutes <= 15 ? durationMinutes - 4 - 2 : 14)
@@ -236,15 +237,28 @@ class EmployeesGridWithEvents extends StatelessWidget {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: textColor,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: fontSize,
-                                  ),
+                                Row(
+                                  spacing: 2,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: textColor,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: fontSize,
+                                        ),
+                                      ),
+                                    ),
+                                    if (hasNote)
+                                      Icon(
+                                        Icons.sticky_note_2_outlined,
+                                        color: textColor,
+                                        size: fontSize,
+                                      ),
+                                  ],
                                 ),
                               ],
                             ),

@@ -40,12 +40,21 @@ String formatDateRange(DateTime from, DateTime to) {
   return '$startStr - $endStr';
 }
 
-Size textSize(String text, TextStyle style, {int maxLines = 2}) {
+/// [style] treba biti stil kakav se zaista prikazuje (spojen sa
+/// DefaultTextStyle), inače visina linije iz teme nije uračunata.
+Size textSize(
+  String text,
+  TextStyle style, {
+  int maxLines = 2,
+  double maxWidth = double.infinity,
+  TextScaler textScaler = TextScaler.noScaling,
+}) {
   final textPainter = TextPainter(
     text: TextSpan(text: text, style: style),
     maxLines: maxLines,
     textDirection: TextDirection.ltr,
-  )..layout();
+    textScaler: textScaler,
+  )..layout(maxWidth: maxWidth);
   return textPainter.size;
 }
 

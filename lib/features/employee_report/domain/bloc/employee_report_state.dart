@@ -19,6 +19,14 @@ final class EmployeeReportFetched extends EmployeeReportState {
   List<Object> get props => [report];
 }
 
+final class EmployeeReportFailure extends EmployeeReportState {
+  const EmployeeReportFailure({required this.message});
+  final String message;
+
+  @override
+  List<Object> get props => [message];
+}
+
 final class EmployeeSelected extends EmployeeReportState {}
 
 final class EmployeeSlotsHistoryLoading extends EmployeeReportState {}

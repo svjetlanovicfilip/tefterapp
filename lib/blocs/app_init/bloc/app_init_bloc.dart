@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
@@ -29,6 +31,10 @@ class AppInitBloc extends Bloc<AppInitEvent, AppInitState> {
   final UsersBloc usersBloc;
   final ClientsBloc clientsBloc;
 
+  /// Koliko se najduže čeka na podatke prije ulaska u aplikaciju. Listeneri
+  /// nastavljaju raditi, pa podaci koji kasne stignu i poslije.
+  static const _initTimeout = Duration(seconds: 15);
+
   Future<void> _onStarted(
     AppInitStarted event,
     Emitter<AppInitState> emit,
@@ -37,9 +43,12 @@ class AppInitBloc extends Bloc<AppInitEvent, AppInitState> {
 
     authBloc.add(AuthenticationCheckRequested());
 
-    await authBloc.stream.firstWhere(
+    // Ako provjera ne završi, korisnik ide na prijavu umjesto da ostane
+    // na splashu.
+    await _waitFor(
+      authBloc.stream,
       (s) => s.status != AuthenticationStatus.unknown,
-    );
+    ).timeout(_initTimeout, onTimeout: () {});
 
     if (authBloc.state.status != AuthenticationStatus.authenticated) {
       emit(AppInitUnauthenticated());
@@ -67,13 +76,20 @@ class AppInitBloc extends Bloc<AppInitEvent, AppInitState> {
     usersBloc.add(UsersFetchRequested());
     clientsBloc.add(ClientsInitListener());
 
-    final results = await Future.wait([
-      slotBloc.stream.firstWhere((s) => s is SlotsLoaded),
-      serviceBloc.stream.firstWhere((s) => s.status == ServiceStatus.loaded),
-      usersBloc.stream.firstWhere((s) => s is UsersFetchingSuccess),
-      clientsBloc.stream.firstWhere((s) => s is ClientsFetchingSuccess),
-    ]);
+    await Future.wait([
+      _waitFor(slotBloc.stream, (s) => s is SlotsLoaded),
+      _waitFor(serviceBloc.stream, (s) => s.status == ServiceStatus.loaded),
+      _waitFor(usersBloc.stream, (s) => s is UsersFetchingSuccess),
+      _waitFor(clientsBloc.stream, (s) => s is ClientsFetchingSuccess),
+    ]).timeout(_initTimeout, onTimeout: () => []);
 
-    return (results[0] as SlotsLoaded).slots;
+    return slotBloc.slots;
+  }
+
+  /// Greška u jednom streamu ne smije zaustaviti ulazak u aplikaciju.
+  Future<void> _waitFor<T>(Stream<T> stream, bool Function(T) test) async {
+    try {
+      await stream.firstWhere(test);
+    } on Object catch (_) {}
   }
 }

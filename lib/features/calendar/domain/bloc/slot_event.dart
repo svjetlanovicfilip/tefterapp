@@ -26,6 +26,12 @@ class UpdateSlot extends SlotEvent {
   final Slot slot;
 }
 
+class UpdateSlotNote extends SlotEvent {
+  const UpdateSlotNote({required this.slotId, required this.note});
+  final String slotId;
+  final String note;
+}
+
 class DeleteSlot extends SlotEvent {
   const DeleteSlot(this.slotId);
   final String slotId;

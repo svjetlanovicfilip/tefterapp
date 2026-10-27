@@ -636,7 +636,11 @@ async function sendSlotNotifications({ orgId, slotId, recipients, actorName, slo
         body: slotNotificationBody(type, actorName, slotTime),
       },
       data: { type, slotId, orgId },
-      android: { priority: "high", notification: { sound: "default" } },
+      android: {
+        priority: "high",
+        // Isti kanal pravi aplikacija; dok ga nema, Android koristi podrazumijevani.
+        notification: { sound: "default", channelId: "termini" },
+      },
       apns: { payload: { aps: { sound: "default" } } },
     };
   });
@@ -661,6 +665,119 @@ async function sendSlotNotifications({ orgId, slotId, recipients, actorName, slo
 
   await Promise.all(invalidTokenRefs.map((ref) => ref.delete()));
 }
+
+
+// ---------------------------------------------------------------------------
+// Termini: provjera preklapanja i upis u jednoj transakciji
+// ---------------------------------------------------------------------------
+
+const SLOT_OVERLAP_MESSAGE =
+  "Termin se preklapa s drugim terminom. Molimo Vas izaberite drugi termin.";
+
+function readMillis(value, field) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new HttpsError("invalid-argument", `${field} je obavezan.`);
+  }
+  return admin.firestore.Timestamp.fromMillis(value);
+}
+
+function readStringList(value, field) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new HttpsError("invalid-argument", `${field} mora biti lista.`);
+  }
+  return value;
+}
+
+function readOptionalString(value) {
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * Callable: saveSlot
+ *
+ * Aplikacija provjerava preklapanje pa upisuje termin, pa dva uređaja koja
+ * u isto vrijeme zakažu isti termin oba prođu provjeru. Ovdje su provjera i
+ * upis u istoj transakciji: druga transakcija vidi prvi termin i odbija se.
+ *
+ * request.data:
+ *  {
+ *    slotId: string,       // id generiše aplikacija, isti i za novi termin
+ *    isNew: boolean,
+ *    startDateTime: number, endDateTime: number,  // millis
+ *    employeeIds: string[], serviceIds: string[],
+ *    clientId?, clientName?, color?, title?
+ *  }
+ */
+exports.saveSlot = onCall(async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "Moraš biti ulogovan.");
+  }
+  const uid = request.auth.uid;
+  const data = request.data || {};
+
+  const slotId = data.slotId;
+  if (!slotId || typeof slotId !== "string" || slotId.includes("/")) {
+    throw new HttpsError("invalid-argument", "slotId je obavezan.");
+  }
+  const start = readMillis(data.startDateTime, "startDateTime");
+  const end = readMillis(data.endDateTime, "endDateTime");
+  if (end.toMillis() <= start.toMillis()) {
+    throw new HttpsError("invalid-argument", "Kraj termina mora biti poslije početka.");
+  }
+  const employeeIds = readStringList(data.employeeIds, "employeeIds");
+  const serviceIds = readStringList(data.serviceIds ?? [], "serviceIds");
+
+  const userSnap = await db.collection("users").doc(uid).get();
+  const user = userSnap.data();
+  if (!userSnap.exists || !user?.orgId || user?.isActive === false) {
+    throw new HttpsError("permission-denied", "Nalog nije aktivan.");
+  }
+
+  const slots = db.collection("organizations").doc(user.orgId).collection("slots");
+  const slotRef = slots.doc(slotId);
+
+  const fields = {
+    title: readOptionalString(data.title),
+    color: readOptionalString(data.color),
+    startDateTime: start,
+    endDateTime: end,
+    serviceIds,
+    employeeIds,
+    clientId: readOptionalString(data.clientId),
+    clientName: readOptionalString(data.clientName),
+    lastModifiedBy: uid,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(slotRef);
+    if (!data.isNew && !existing.exists) {
+      // not-found aplikacija tumači kao funkciju koja nije deployovana.
+      throw new HttpsError("failed-precondition", "Termin više ne postoji.");
+    }
+
+    for (const employeeId of employeeIds) {
+      const overlapping = await transaction.get(
+        slots
+          .where("employeeIds", "array-contains", employeeId)
+          .where("startDateTime", "<", end)
+          .where("endDateTime", ">", start)
+          .orderBy("startDateTime")
+      );
+      if (overlapping.docs.some((doc) => doc.id !== slotId)) {
+        throw new HttpsError("already-exists", SLOT_OVERLAP_MESSAGE);
+      }
+    }
+
+    if (existing.exists) {
+      transaction.update(slotRef, fields);
+    } else {
+      transaction.set(slotRef, { ...fields, createdBy: uid });
+    }
+  });
+
+  return { slotId };
+});
 
 
 // ---------------------------------------------------------------------------

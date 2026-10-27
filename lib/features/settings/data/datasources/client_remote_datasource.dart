@@ -73,7 +73,9 @@ class ClientRemoteDatasource {
           .collection(clientsCollection)
           .doc(client.id)
           .update({
-            ...client.toJson(),
+            // createdAt se nikad ne prepisuje; forma ga ne mora imati, a null
+            // bi obrisao datum "Klijent od".
+            ...client.toJson()..remove('createdAt'),
             'updatedAt': FieldValue.serverTimestamp(),
           });
     } on Exception catch (e) {

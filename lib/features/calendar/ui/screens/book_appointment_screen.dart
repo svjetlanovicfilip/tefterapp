@@ -69,6 +69,10 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
 
   bool isSlotInPast = false;
 
+  /// Čeka se SlotSaved ili greška iz SlotBloc-a; ekran se zatvara tek kad je
+  /// termin sačuvan, da korisnik ne izgubi unos ako snimanje ne uspije.
+  bool _isSaving = false;
+
   late final String selectedColor;
 
   @override
@@ -152,6 +156,24 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
             });
           },
         ),
+        BlocListener<SlotBloc, SlotState>(
+          bloc: getIt<SlotBloc>(),
+          listenWhen:
+              (previous, current) =>
+                  _isSaving &&
+                  (current is SlotSaved || current is ErrorLoadingSlots),
+          listener: (context, state) {
+            setState(() => _isSaving = false);
+
+            if (state is SlotSaved) {
+              Navigator.of(context).pop();
+            } else if (state is ErrorLoadingSlots) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(state.errorMessage)));
+            }
+          },
+        ),
         BlocListener<ServiceBloc, ServiceState>(
           bloc: _serviceBloc,
           listener: (context, state) {
@@ -204,7 +226,7 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
                                 ),
                               ),
                               Text(
-                                'Termin je već prošao i ne može se izmijeniti.',
+                                'Termin je već prošao. Možete izmijeniti samo detalje usluge.',
                                 style: theme.textTheme.labelMedium?.copyWith(
                                   color: AppColors.slate600,
                                   fontWeight: FontWeight.w400,
@@ -334,7 +356,6 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
                 TextField(
                   controller: titleController,
                   maxLines: 3,
-                  enabled: !isSlotInPast,
                   textInputAction: TextInputAction.done,
                   decoration: InputDecoration(
                     hintText: 'Unesite detalje usluge...',
@@ -357,13 +378,13 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                if (!isSlotInPast)
-                  PrimaryButton(
-                    onTap: handleSubmit,
-                    title: 'Potvrdi',
-                    borderRadius: BorderRadius.circular(12),
-                    padding: const EdgeInsets.all(10),
-                  ),
+                PrimaryButton(
+                  onTap: handleSubmit,
+                  isLoading: _isSaving,
+                  title: isSlotInPast ? 'Sačuvaj napomenu' : 'Potvrdi',
+                  borderRadius: BorderRadius.circular(12),
+                  padding: const EdgeInsets.all(10),
+                ),
                 const SizedBox(height: 12),
                 if (isEditing && !isSlotInPast)
                   PrimaryButton(
@@ -470,13 +491,19 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
   }
 
   Future<void> handleSubmit() async {
+    final title = titleController.text.trim();
+
+    // Na prošlom terminu može se mijenjati samo napomena.
+    if (isSlotInPast) {
+      _saveNote(title);
+      return;
+    }
+
     setState(() {
       isFormSubmitted = true;
     });
 
     _validateTimeRange();
-
-    final title = titleController.text.trim();
 
     final employeeIds =
         _employeesPickerCubit.state.keys
@@ -517,13 +544,44 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
       clientName: clientName,
     );
 
+    final originalSlot = args?.slot;
+    if (originalSlot != null && _isOnlyNoteChanged(originalSlot, newSlot)) {
+      _saveNote(title);
+      return;
+    }
+
+    setState(() => _isSaving = true);
     if (isEditing) {
       getIt<SlotBloc>().add(UpdateSlot(newSlot));
     } else {
       getIt<SlotBloc>().add(AddNewSlot(newSlot));
     }
+  }
 
-    Navigator.of(context).pop();
+  void _saveNote(String note) {
+    final slotId = args?.slot?.id;
+    if (slotId == null) return;
+
+    setState(() => _isSaving = true);
+    getIt<SlotBloc>().add(UpdateSlotNote(slotId: slotId, note: note));
+  }
+
+  /// Ako su vrijeme, zaposleni, usluge i klijent isti, ne treba provjeravati
+  /// preklapanje (koje bi moglo odbiti i samu izmjenu napomene).
+  bool _isOnlyNoteChanged(Slot original, Slot updated) {
+    const setEquality = SetEquality<String>();
+
+    return original.startDateTime == updated.startDateTime &&
+        original.endDateTime == updated.endDateTime &&
+        original.clientId == updated.clientId &&
+        setEquality.equals(
+          original.employeeIds.toSet(),
+          updated.employeeIds.toSet(),
+        ) &&
+        setEquality.equals(
+          original.serviceIds.toSet(),
+          updated.serviceIds.toSet(),
+        );
   }
 
   void handleDelete() {

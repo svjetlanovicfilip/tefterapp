@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart' hide Result;
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 import '../../../../common/constants/routes.dart';
@@ -13,11 +14,26 @@ import '../../../service/domain/bloc/service_bloc.dart';
 import '../../../settings/domain/bloc/clients_bloc.dart';
 import '../../../users/domain/bloc/users_bloc.dart';
 import '../models/slot.dart';
+import '../models/slot_save_outcome.dart';
 
 class CalendarRemoteDatasource {
-  CalendarRemoteDatasource({required this.firebaseFirestore});
+  CalendarRemoteDatasource({
+    required this.firebaseFirestore,
+    required this.functions,
+  });
 
   final FirebaseFirestore firebaseFirestore;
+  final FirebaseFunctions functions;
+
+  /// Greške kod kojih funkcija nije ni stigla do upisa, pa se termin može
+  /// upisati direktno. not-found znači da funkcija nije deployovana.
+  static const _unavailableCodes = {
+    'unavailable',
+    'deadline-exceeded',
+    'not-found',
+    'internal',
+    'unknown',
+  };
 
   CollectionReference<Map<String, dynamic>> get _slots => firebaseFirestore
       .collection(organizationsCollection)
@@ -55,20 +71,67 @@ class CalendarRemoteDatasource {
     }
   }
 
-  Future<Result<DocumentReference, Exception>> createSlot(Slot slot) async {
+  /// Id za novi termin. Generiše se unaprijed, da ponovljeni upis (npr.
+  /// direktno nakon neuspjelog poziva funkcije) ne napravi duplikat.
+  String newSlotId() => _slots.doc().id;
+
+  /// Provjera preklapanja i upis u jednoj transakciji na serveru.
+  Future<Result<SlotSaveOutcome, Exception>> saveSlotAtomically(
+    Slot slot, {
+    required bool isNew,
+  }) async {
     try {
-      final result = await firebaseFirestore
-          .collection(organizationsCollection)
-          .doc(appState.organizationId)
-          .collection(slotsCollection)
-          .add({
-            ...slot.toJson(),
-            'createdBy': appState.currentUser?.id,
-            'lastModifiedBy': appState.currentUser?.id,
-            'updatedAt': FieldValue.serverTimestamp(),
+      await functions
+          .httpsCallable(
+            'saveSlot',
+            options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
+          )
+          .call(<String, dynamic>{
+            'slotId': slot.id,
+            'isNew': isNew,
+            'startDateTime': slot.startDateTime.millisecondsSinceEpoch,
+            'endDateTime': slot.endDateTime?.millisecondsSinceEpoch,
+            'employeeIds': slot.employeeIds,
+            'serviceIds': slot.serviceIds,
+            'clientId': slot.clientId,
+            'clientName': slot.clientName,
+            'color': slot.color,
+            'title': slot.title,
           });
 
-      return Result.success(result);
+      return Result.success(SlotSaveOutcome.saved);
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'already-exists') {
+        return Result.success(SlotSaveOutcome.overlapping);
+      }
+      if (e.code == 'failed-precondition') {
+        return Result.success(SlotSaveOutcome.slotMissing);
+      }
+      if (_unavailableCodes.contains(e.code)) {
+        return Result.success(SlotSaveOutcome.serverUnavailable);
+      }
+
+      unawaited(
+        FirebaseCrashlytics.instance.recordError(e, StackTrace.current),
+      );
+      return Result.failure(Exception(e));
+    } on Exception catch (_) {
+      // Npr. TimeoutException ili greška mreže.
+      return Result.success(SlotSaveOutcome.serverUnavailable);
+    }
+  }
+
+  Future<Result<DocumentReference, Exception>> createSlot(Slot slot) async {
+    try {
+      final ref = _slots.doc(slot.id);
+      await ref.set({
+        ...slot.toJson(),
+        'createdBy': appState.currentUser?.id,
+        'lastModifiedBy': appState.currentUser?.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      return Result.success(ref);
     } on Exception catch (e) {
       unawaited(
         FirebaseCrashlytics.instance.recordError(e, StackTrace.current),
@@ -89,6 +152,27 @@ class CalendarRemoteDatasource {
             'lastModifiedBy': appState.currentUser?.id,
             'updatedAt': FieldValue.serverTimestamp(),
           });
+
+      return Result.success(true);
+    } on Exception catch (e) {
+      unawaited(
+        FirebaseCrashlytics.instance.recordError(e, StackTrace.current),
+      );
+      return Result.failure(Exception(e));
+    }
+  }
+
+  /// Mijenja samo napomenu termina (title), npr. na terminu koji je prošao.
+  Future<Result<bool, Exception>> updateSlotNote({
+    required String slotId,
+    required String note,
+  }) async {
+    try {
+      await _slots.doc(slotId).update({
+        'title': note,
+        'lastModifiedBy': appState.currentUser?.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
 
       return Result.success(true);
     } on Exception catch (e) {

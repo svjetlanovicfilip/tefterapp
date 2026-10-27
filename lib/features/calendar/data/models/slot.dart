@@ -63,11 +63,15 @@ class Slot extends Equatable {
       endDate: endDateTime,
       title: title ?? '',
       event: this,
-      color:
-          color != null && color!.isNotEmpty
-              ? Color(int.parse(color!))
-              : AppColors.amber500,
+      color: displayColor,
     );
+  }
+
+  /// Boja termina; ako nije postavljena ili nije ispravna, koristi se
+  /// podrazumijevana.
+  Color get displayColor {
+    final value = int.tryParse(color ?? '');
+    return value != null ? Color(value) : AppColors.amber500;
   }
 
   Slot copyWith({

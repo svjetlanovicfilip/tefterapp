@@ -19,7 +19,7 @@ class EmployeeReportRemoteDatasource {
           .doc(appState.organizationId)
           .collection(slotsCollection)
           .where('employeeIds', arrayContains: employeeId)
-          .where('startDateTime', isLessThanOrEqualTo: Timestamp.fromDate(to))
+          .where('startDateTime', isLessThan: Timestamp.fromDate(to))
           .where(
             'endDateTime',
             isGreaterThanOrEqualTo: Timestamp.fromDate(from),

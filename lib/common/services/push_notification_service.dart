@@ -5,8 +5,8 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../../config/style/colors.dart';
 import '../../features/calendar/data/repositories/calendar_repository.dart';
 import '../../features/calendar/ui/screens/book_appointment_screen.dart';
 import '../constants/routes.dart';
@@ -30,7 +30,18 @@ class PushNotificationService {
   final FirebaseFunctions functions;
   final CalendarRepository calendarRepository;
 
-  static const _bannerDuration = Duration(seconds: 8);
+  /// Plugin se koristi samo na Androidu: tamo sistem ne prikazuje push dok je
+  /// aplikacija otvorena. Na iOS-u to radi sistem sam.
+  final _localNotifications = FlutterLocalNotificationsPlugin();
+
+  static const _androidChannel = AndroidNotificationChannel(
+    // Isti id šalje i Cloud Function, pa sve notifikacije termina idu u
+    // isti kanal.
+    'termini',
+    'Termini',
+    description: 'Novi, izmijenjeni i otkazani termini.',
+    importance: Importance.high,
+  );
 
   bool _isUserSignedIn = false;
 
@@ -41,7 +52,6 @@ class PushNotificationService {
   /// aplikacija bila spremna (npr. aplikacija je bila ugašena).
   String? _pendingSlotId;
 
-  Timer? _bannerTimer;
   StreamSubscription<String>? _tokenRefreshSubscription;
 
   /// Poziva se jednom, odmah nakon inicijalizacije Firebase-a.
@@ -49,9 +59,47 @@ class PushNotificationService {
     FirebaseMessaging.onMessage.listen(_onForegroundMessage);
     FirebaseMessaging.onMessageOpenedApp.listen(_onNotificationOpened);
 
+    if (Platform.isIOS) {
+      // Notifikacija sa zvukom i dok je aplikacija otvorena; tap stiže kroz
+      // onMessageOpenedApp kao i inače.
+      await messaging.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    } else if (Platform.isAndroid) {
+      await _initLocalNotifications();
+    }
+
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       _onNotificationOpened(initialMessage);
+    }
+  }
+
+  Future<void> _initLocalNotifications() async {
+    await _localNotifications.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings(
+          '@mipmap/ic_launcher_monochrome',
+        ),
+      ),
+      onDidReceiveNotificationResponse:
+          (response) => _onLocalNotificationTapped(response.payload),
+    );
+
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(_androidChannel);
+
+    // Aplikacija je ugašena, a korisnik je tapnuo notifikaciju koju je
+    // aplikacija ranije prikazala.
+    final launchDetails =
+        await _localNotifications.getNotificationAppLaunchDetails();
+    if (launchDetails?.didNotificationLaunchApp ?? false) {
+      _onLocalNotificationTapped(launchDetails!.notificationResponse?.payload);
     }
   }
 
@@ -90,7 +138,6 @@ class PushNotificationService {
   Future<void> onUserSignedOut() async {
     _isUserSignedIn = false;
     _pendingSlotId = null;
-    _hideBanner();
 
     await _unregisterToken();
   }
@@ -118,7 +165,6 @@ class PushNotificationService {
 
     if (!enabled) {
       _isEnabled = false;
-      _hideBanner();
       await SharedPrefsService.instance.setPushNotificationsEnabled(
         userId,
         enabled: false,
@@ -265,70 +311,44 @@ class PushNotificationService {
     }
   }
 
-  /// Dok je aplikacija otvorena sistem ne prikazuje notifikaciju, pa je
-  /// prikazujemo kao banner na vrhu ekrana.
+  /// Payload je id termina; prazan kad notifikacija ne vodi na termin.
+  void _onLocalNotificationTapped(String? slotId) {
+    if (slotId == null || slotId.isEmpty) return;
+
+    if (!_isUserSignedIn) {
+      _pendingSlotId = slotId;
+      return;
+    }
+    unawaited(openSlot(slotId));
+  }
+
+  /// Na Androidu sistem ne prikazuje push dok je aplikacija otvorena, pa ga
+  /// prikazujemo kao lokalnu notifikaciju. Na iOS-u ga prikazuje sistem.
   void _onForegroundMessage(RemoteMessage message) {
-    debugPrint(
-      'Push (aplikacija otvorena): ${message.notification?.title} '
-      '${message.data}, prijavljen: $_isUserSignedIn',
-    );
-    if (!_isUserSignedIn || !_isEnabled) return;
+    if (!Platform.isAndroid || !_isUserSignedIn || !_isEnabled) return;
 
     final notification = message.notification;
-    final messenger = scaffoldMessengerKey.currentState;
-    if (notification == null || messenger == null) return;
+    if (notification == null) return;
 
     final slotId = _slotIdFrom(message);
 
-    _bannerTimer?.cancel();
-    messenger
-      ..hideCurrentMaterialBanner()
-      ..showMaterialBanner(
-        MaterialBanner(
-          backgroundColor: AppColors.white,
-          leading: const Icon(
-            Icons.notifications_active,
-            color: AppColors.amber500,
+    unawaited(
+      _localNotifications.show(
+        // Nova notifikacija za isti termin zamjenjuje prethodnu.
+        (slotId ?? message.messageId ?? '').hashCode,
+        notification.title,
+        notification.body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _androidChannel.id,
+            _androidChannel.name,
+            channelDescription: _androidChannel.description,
+            importance: Importance.high,
+            priority: Priority.high,
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            spacing: 2,
-            children: [
-              Text(
-                notification.title ?? '',
-                style: const TextStyle(
-                  color: AppColors.slate800,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if ((notification.body ?? '').isNotEmpty)
-                Text(
-                  notification.body!,
-                  style: const TextStyle(color: AppColors.slate600),
-                ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: _hideBanner, child: const Text('Zatvori')),
-            if (slotId != null)
-              TextButton(
-                onPressed: () {
-                  _hideBanner();
-                  unawaited(openSlot(slotId));
-                },
-                child: const Text('Pogledaj termin'),
-              ),
-          ],
         ),
-      );
-
-    _bannerTimer = Timer(_bannerDuration, _hideBanner);
-  }
-
-  void _hideBanner() {
-    _bannerTimer?.cancel();
-    _bannerTimer = null;
-    scaffoldMessengerKey.currentState?.hideCurrentMaterialBanner();
+        payload: slotId,
+      ),
+    );
   }
 }
